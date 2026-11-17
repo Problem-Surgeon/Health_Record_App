@@ -96,8 +96,9 @@ h1.sm{font-size:22px}
 .in:focus{box-shadow:0 0 0 2px var(--purple)}
 textarea.in{height:auto;min-height:80px;padding:12px;resize:vertical;line-height:1.4}
 .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.med{display:grid;grid-template-columns:minmax(0,1fr) 110px 32px;grid-template-areas:'name name x' 'dur cost .';gap:6px;align-items:center;padding-bottom:10px;border-bottom:1px solid var(--line2)}
-.med .m-name{grid-area:name;font-weight:600}.med .m-x{grid-area:x}.med .m-dur{grid-area:dur}.med .m-cost{grid-area:cost}
+.med{display:grid;grid-template-columns:minmax(0,1fr) 64px 92px 32px;grid-template-areas:'name name name x' 'dur qty cost .';gap:6px;align-items:center;padding-bottom:10px;border-bottom:1px solid var(--line2)}
+.med .m-name{grid-area:name;font-weight:600}.med .m-x{grid-area:x}.med .m-dur{grid-area:dur}.med .m-cost{grid-area:cost}.med .m-qty{grid-area:qty}
+.med.rf{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 32px;grid-template-areas:'name name x' 'qty cost .'}
 .x-btn{width:32px;height:32px;border-radius:16px;border:none;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:center;padding:0}
 .x-btn svg{width:16px;height:16px}
 .link-btn{height:40px;align-self:flex-start;padding:0 4px;border:none;background:transparent;color:var(--purple);font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px}
@@ -123,7 +124,8 @@ textarea.in{height:auto;min-height:80px;padding:12px;resize:vertical;line-height
 .check{width:24px;height:24px;border-radius:8px;border:1.5px solid #C9C9D1;display:flex;align-items:center;justify-content:center;flex:none}
 .check.on{background:var(--purple);border-color:var(--purple);color:#fff}
 .check svg{width:14px;height:14px}
-.preview{background:var(--field);border-radius:14px;padding:12px;font-size:12.5px;line-height:1.55;color:#26262C;white-space:pre-wrap;max-height:220px;overflow:auto;margin:0;font-family:inherit}
+.preview-box{background:var(--field);border-radius:14px;padding:12px}
+.preview{font-size:12.5px;line-height:1.55;color:#26262C;white-space:pre-wrap;max-height:220px;overflow:auto;margin:0;font-family:inherit}
 .btn-row{display:flex;gap:10px}
 .btn{flex:1;height:52px;border-radius:26px;border:1px solid var(--line);background:var(--card);font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 12px}
 .btn.primary{background:var(--purple);color:#fff;border-color:var(--purple)}
@@ -193,3 +195,21 @@ textarea.in{height:auto;min-height:80px;padding:12px;resize:vertical;line-height
 @keyframes fade{from{opacity:0}to{opacity:1}}
 @keyframes up{from{transform:translateY(40px)}to{transform:none}}
 @keyframes shake{0%,100%{transform:none}25%{transform:translateX(-10px)}75%{transform:translateX(10px)}}
+
+.ex-ail{border-bottom:1px solid var(--line2)}
+.ex-ail:last-child{border-bottom:none}
+.ex-ail .list-item{border-bottom:none}
+.ex-row{display:flex;align-items:center;padding-right:8px}
+.ex-chev{width:44px;height:44px;flex:none;border-radius:22px;border:1px solid var(--line);background:var(--card);display:flex;align-items:center;justify-content:center;padding:0;color:var(--muted)}
+.ex-chev svg{width:20px;height:20px}
+.ex-visits{margin:0 12px 10px 52px;border-left:2px solid var(--line);}
+.ex-visits .list-item{padding:9px 12px}
+
+.bottom-pair{position:fixed;left:max(20px,calc(50% - 240px));right:max(20px,calc(50% - 240px));bottom:calc(var(--safe-bottom) + 24px);display:flex;gap:10px;z-index:5}
+.bottom-pair .btn{height:56px;border-radius:28px;box-shadow:0 6px 20px rgba(17,17,20,.12)}
+.bottom-pair .btn:last-child{flex:1.4}
+.med-head{display:grid;grid-template-columns:minmax(0,1fr) 64px 92px 32px;gap:6px;font-size:12px;font-weight:600;color:var(--muted)}
+.med-head span:first-child{grid-column:1}
+.med-head.rf{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 32px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin svg{animation:spin 1s linear infinite}
