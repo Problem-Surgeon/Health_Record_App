@@ -1,6 +1,6 @@
 'use strict';
 /* Health Records — offline web app. All data stays on this device (IndexedDB). */
-const APP_VERSION = '2.9';
+const APP_VERSION = '2.10';
 
 /* ---------------- helpers ---------------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -158,7 +158,7 @@ const byDateAsc = (a, b) => (a.date || '').localeCompare(b.date || '') || (a.cre
 const visitsOf = (aid) => S.visits.filter((v) => v.ailmentId === aid).sort(byDateAsc);
 const qtyOf = (m) => num(m.qty) || 1;
 // Visit medicines store the TOTAL paid for that line; restocks store price per pack/unit × quantity.
-const PACKS = { unit: { size: 1, label: 'Unit' }, pack10: { size: 10, label: 'Pack of 10' }, pack15: { size: 15, label: 'Pack of 15' } };
+const PACKS = { unit: { size: 1, label: 'Loose' }, pack10: { size: 10, label: 'Pack of 10' }, pack15: { size: 15, label: 'Pack of 15' } };
 const packOf = (m) => PACKS[m.pack] || PACKS.unit;
 const unitsOf = (m) => qtyOf(m) * packOf(m).size;
 const visitLine = (m) => (m.total !== undefined ? num(m.total) : num(m.cost) * qtyOf(m));
@@ -375,7 +375,7 @@ const VIEWS = {
           <input class="in m-name" aria-label="Medicine ${i + 1} name" placeholder="Medicine name" value="${esc(m.name)}" data-bind="draft.meds.${i}.name">
           <button class="x-btn m-x" data-act="delMed" data-i="${i}" aria-label="Remove medicine ${i + 1}">${ICON.close}</button>
           <input class="in m-qty" aria-label="Medicine ${i + 1} quantity" inputmode="numeric" placeholder="Qty" value="${esc(m.qty)}" data-bind="draft.meds.${i}.qty">
-          <select class="in m-pack" aria-label="Medicine ${i + 1} unit" data-bind="draft.meds.${i}.pack" ${m.form === 'syrup' ? 'disabled' : ''}>${Object.entries(PACKS).map(([k, pk]) => `<option value="${k}" ${(m.form === 'syrup' ? 'unit' : (m.pack || 'unit')) === k ? 'selected' : ''}>${k === 'unit' && m.form === 'syrup' ? 'Unit (syrup)' : pk.label}</option>`).join('')}</select>
+          <select class="in m-pack" aria-label="Medicine ${i + 1} unit" data-bind="draft.meds.${i}.pack" ${m.form === 'syrup' ? 'disabled' : ''}>${Object.entries(PACKS).map(([k, pk]) => `<option value="${k}" ${(m.form === 'syrup' ? 'unit' : (m.pack || 'unit')) === k ? 'selected' : ''}>${k === 'unit' && m.form === 'syrup' ? 'Bottle (syrup)' : pk.label}</option>`).join('')}</select>
           <input class="in m-cost" aria-label="Medicine ${i + 1} total cost in rupees" inputmode="decimal" placeholder="Total ₹" value="${esc(m.total)}" data-bind="draft.meds.${i}.total">
           ${schedEditor(m, i)}</div>`).join('')}
         <button class="link-btn" data-act="addMed">${ICON.plus} Add medicine</button>
@@ -755,7 +755,7 @@ function modalView() {
           <input class="in m-name" aria-label="Medicine ${i + 1} name" placeholder="Medicine name" value="${esc(x.name)}" data-bind="modal.data.meds.${i}.name">
           <button class="x-btn m-x" data-act="rDelMed" data-i="${i}" aria-label="Remove medicine ${i + 1}">${ICON.close}</button>
           <input class="in m-qty" aria-label="Medicine ${i + 1} quantity" inputmode="numeric" placeholder="Qty" value="${esc(x.qty)}" data-bind="modal.data.meds.${i}.qty">
-          <select class="in m-pack" id="mp-${i}" aria-label="Medicine ${i + 1} unit" data-bind="modal.data.meds.${i}.pack" ${isSyrupName(x.name) ? 'disabled' : ''}>${Object.entries(PACKS).map(([k, pk]) => `<option value="${k}" ${(isSyrupName(x.name) ? 'unit' : (x.pack || 'unit')) === k ? 'selected' : ''}>${k === 'unit' && isSyrupName(x.name) ? 'Unit (syrup)' : pk.label}</option>`).join('')}</select>
+          <select class="in m-pack" id="mp-${i}" aria-label="Medicine ${i + 1} unit" data-bind="modal.data.meds.${i}.pack" ${isSyrupName(x.name) ? 'disabled' : ''}>${Object.entries(PACKS).map(([k, pk]) => `<option value="${k}" ${(isSyrupName(x.name) ? 'unit' : (x.pack || 'unit')) === k ? 'selected' : ''}>${k === 'unit' && isSyrupName(x.name) ? 'Bottle (syrup)' : pk.label}</option>`).join('')}</select>
           <input class="in m-cost" aria-label="Medicine ${i + 1} price per ${packOf(x).size > 1 ? 'pack' : 'unit'} in rupees" inputmode="decimal" placeholder="₹ each" value="${esc(x.cost)}" data-bind="modal.data.meds.${i}.cost"></div>`).join('')}
         <button class="link-btn" data-act="rAddMed">${ICON.plus} Add medicine</button>
         <div class="totals"><div class="big"><span>Total</span><span id="r-total">${rs(sum)}</span></div></div>
@@ -1483,7 +1483,7 @@ function onBind(ev) {
   if (nm && UI.modal?.kind === 'refill') {
     const i = +nm[1]; const x = UI.modal.data.meds[i]; const sel = document.getElementById('mp-' + i); const syr = isSyrupName(x.name);
     if (syr) x.pack = 'unit';
-    if (sel) { sel.disabled = syr; sel.value = x.pack || 'unit'; sel.options[0].textContent = syr ? 'Unit (syrup)' : 'Unit'; }
+    if (sel) { sel.disabled = syr; sel.value = x.pack || 'unit'; sel.options[0].textContent = syr ? 'Bottle (syrup)' : 'Loose'; }
     const el2 = document.getElementById('r-total'); if (el2) el2.textContent = rs(UI.modal.data.meds.reduce((t, y) => t + refillLine(y), 0));
   }
   if (path === 'draft.date') { const lb = document.getElementById('v-label'); if (lb && UI.draft) lb.textContent = draftLabel(UI.draft); }
