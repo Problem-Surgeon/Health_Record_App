@@ -1,6 +1,6 @@
 'use strict';
 /* Health Records — offline web app. All data stays on this device (IndexedDB). */
-const APP_VERSION = '2.5';
+const APP_VERSION = '2.8';
 
 /* ---------------- helpers ---------------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -36,10 +36,12 @@ const PALETTE = [
   { c: '#111114', bg: '#111114', tint: '#ECECEF', fg: '#FFFFFF', name: 'Black' },
   { c: '#F2B705', bg: '#FEF3C7', tint: '#FEF6D8', fg: '#92400E', name: 'Yellow' },
   { c: '#E5484D', bg: '#FDECEC', tint: '#FDEBEB', fg: '#B42318', name: 'Red' },
-  { c: '#30A46C', bg: '#E6F6EC', tint: '#E7F6EC', fg: '#1E7A4D', name: 'Green' }
+  { c: '#30A46C', bg: '#E6F6EC', tint: '#E7F6EC', fg: '#1E7A4D', name: 'Green' },
+  { c: '#E93D82', bg: '#FDE7F0', tint: '#FDEEF4', fg: '#B3125F', name: 'Pink' },
+  { c: '#12A594', bg: '#DDF3EF', tint: '#E4F6F3', fg: '#0B7266', name: 'Teal' }
 ];
 const pal = (c) => PALETTE.find((p) => p.c === c) || PALETTE[0];
-const MAX_PEOPLE = 6;
+const MAX_PEOPLE = 8;
 
 const I = (d, extra = '') => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${d}</svg>`;
 const ICON = {
@@ -141,7 +143,7 @@ function stamp() {
   HASH = seen;
 }
 async function save() {
-  stamp(); SAVE_N++;
+  stamp(); SAVE_N++; rebuildSyrups();
   try { await DB.put('kv', 'state', S); await DB.put('kv', 'hashes', HASH); }
   catch (e) { toast('Could not save. Your phone may be out of storage.'); throw e; }
   if (SY.cfg?.on && !SY.dirty) { SY.dirty = true; DB.put('kv', 'syncDirty', true).catch(() => {}); updateSyncDot(); }
@@ -155,20 +157,52 @@ const ailmentsOf = (pid) => S.ailments.filter((a) => a.personId === pid);
 const byDateAsc = (a, b) => (a.date || '').localeCompare(b.date || '') || (a.created || 0) - (b.created || 0);
 const visitsOf = (aid) => S.visits.filter((v) => v.ailmentId === aid).sort(byDateAsc);
 const qtyOf = (m) => num(m.qty) || 1;
-const lineCost = (m) => num(m.cost) * qtyOf(m);
-const medsCost = (v) => (v.meds || []).reduce((s, m) => s + lineCost(m), 0);
+// Visit medicines store the TOTAL paid for that line; restocks store price per pack/unit × quantity.
+const PACKS = { unit: { size: 1, label: 'Unit' }, pack10: { size: 10, label: 'Pack of 10' }, pack15: { size: 15, label: 'Pack of 15' } };
+const packOf = (m) => PACKS[m.pack] || PACKS.unit;
+const unitsOf = (m) => qtyOf(m) * packOf(m).size;
+const visitLine = (m) => (m.total !== undefined ? num(m.total) : num(m.cost) * qtyOf(m));
+const refillLine = (m) => num(m.cost) * qtyOf(m);
+const medsCost = (v) => (v.meds || []).reduce((s, m) => s + visitLine(m), 0);
 const visitTotal = (v) => num(v.fee) + medsCost(v);
 const refillsOf = (aid) => S.refills.filter((r) => r.ailmentId === aid).sort(byDateAsc);
-const refillTotal = (r) => (r.meds || []).reduce((s, m) => s + lineCost(m), 0);
+const refillTotal = (r) => (r.meds || []).reduce((s, m) => s + refillLine(m), 0);
 // quantity in grey, medicine name darker
 const medHtml = (m) => ((m.qty || '').toString().trim() ? `<span style="color:#8A8A93">${esc(String(m.qty).trim())} ×</span> ` : '') + `<span style="color:#26262C;font-weight:500">${esc(m.name || '')}</span>`;
-const priceNote = (m) => num(m.cost) && num(m.qty) > 1 ? `${rs(num(m.cost))} each` : '';
+const rs2 = (n) => '₹' + (Math.round(n * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+// visit line: price per unit worked out from total ÷ qty
+const priceNote = (m) => { const t = visitLine(m), q = num(m.qty); return t && q > 1 ? `${rs2(t / q)} each` : ''; };
+// restock line: "3 × Pack of 10 · 30 units"
+const refillHtml = (m) => { const pk = packOf(m); const q = (m.qty || '').toString().trim();
+  return `${q ? `<span style="color:#8A8A93">${esc(q)} ×</span> ` : ''}<span style="color:#26262C;font-weight:500">${esc(m.name || '')}</span>${pk.size > 1 && q ? `<span style="color:#8A8A93"> (${esc(pk.label.toLowerCase())} · ${unitsOf(m)} units)</span>` : ''}`; };
+const refillText = (m) => { const pk = packOf(m); const q = (m.qty || '').toString().trim();
+  return `${q ? q + ' × ' : ''}${m.name || ''}${pk.size > 1 && q ? ` (${pk.label.toLowerCase()}, ${unitsOf(m)} units)` : ''}${num(m.cost) ? ` @ ${rs2(num(m.cost))} per ${pk.size > 1 ? 'pack' : 'unit'}` : ''}`; };
+// Syrups are bought one bottle at a time, never in packs of 10/15.
+// SYRUPS is a list of every medicine name saved as "Syrup" in a visit, refreshed when data is saved or synced.
+// Matching ignores capitals and extra spaces, but the name must match fully.
+const normName = (x) => String(x || '').trim().toLowerCase().replace(/\s+/g, ' ');
+let SYRUPS = new Set();
+function rebuildSyrups() {
+  SYRUPS = new Set();
+  for (const v of S.visits) for (const m of v.meds || []) if (m.form === 'syrup' && normName(m.name)) SYRUPS.add(normName(m.name));
+}
+const isSyrupName = (name) => SYRUPS.has(normName(name));
+const TIMES = [['morning', 'Morning'], ['noon', 'Noon'], ['night', 'Night']];
+const newMed = () => ({ name: '', qty: '', total: '', form: 'tablet', times: [], meal: '', portion: 'full', ml: '' });
+// "Tablet · ½ · Morning, Night · after meal" / "Syrup · 20 ml · Morning · before meal"
+function schedText(m) {
+  const times = (m.times || []).map((t) => (TIMES.find((x) => x[0] === t) || [])[1]).filter(Boolean);
+  if (!m.form && !times.length && !m.meal) return '';
+  const syrup = m.form === 'syrup';
+  return [syrup ? 'Syrup' : 'Tablet', syrup ? (num(m.ml) ? `${num(m.ml)} ml` : '') : (m.portion === 'half' ? 'half' : 'full'),
+    times.join(', '), m.meal ? `${m.meal} meal` : ''].filter(Boolean).join(' · ');
+}
 const medLabel = (m) => ((m.qty || '').toString().trim() ? `${String(m.qty).trim()} × ` : '') + (m.name || '');
 const ailmentTotal = (aid) => visitsOf(aid).reduce((s, v) => s + visitTotal(v), 0) + refillsOf(aid).reduce((s, r) => s + refillTotal(r), 0);
 const lastDate = (a) => visitsOf(a.id).reduce((d, v) => (v.date > d ? v.date : d), a.start || '');
 // Visits are numbered by date: Visit-1 is the oldest. A custom name replaces the "Visit-N" label.
 const visitPos = (v) => { const vs = visitsOf(v.ailmentId); const i = vs.findIndex((x) => x.id === v.id); return i < 0 ? vs.length + 1 : i + 1; };
-const vName = (v, pos) => (v.name || '').trim() || 'Visit-' + (pos ?? visitPos(v));
+const vName = (v, pos) => 'Visit-' + (pos ?? visitPos(v));
 const fileCount = (aid) => visitsOf(aid).reduce((s, v) => s + (v.files || []).length + (v.voice || []).length, 0);
 
 /* ---------------- UI state & navigation ---------------- */
@@ -296,7 +330,7 @@ const VIEWS = {
         <button class="icon-btn" data-act="editAilment" data-id="${a.id}" aria-label="Edit ailment">${ICON.edit}</button>
       </div>
       <div class="col" style="gap:8px">
-        <span class="small muted">${esc(p?.name || '')}</span>
+        <span style="font-size:21px;font-weight:600;letter-spacing:-.01em;color:${p ? (p.color === '#111114' ? '#111114' : pal(p.color).fg) : '#6B6B73'}">${esc(p?.name || '')}</span>
         <h1 style="font-size:26px">${esc(a.name)}</h1>
         <div class="row" style="gap:8px">${typeChip(a.type)}<span class="small muted">${a.start ? 'Started ' + fmtDate(a.start) : ''}</span></div>
       </div>
@@ -326,17 +360,17 @@ const VIEWS = {
         <span style="width:44px"></span>
       </div>
       <div class="card pad grid2">
-        <div class="field"><label class="flabel" for="v-name">Visit name</label><input class="in" id="v-name" value="${esc(d.name)}" data-bind="draft.name" placeholder="Auto (by date)" style="font-weight:600"></div>
+        <div class="field"><span class="flabel">Visit</span><div class="in" id="v-label" style="display:flex;align-items:center;background:transparent;padding:0;font-weight:700;font-size:18px">${draftLabel(d)}</div></div>
         <div class="field"><label class="flabel" for="v-date">Date</label><input class="in" id="v-date" type="date" value="${esc(d.date)}" data-bind="draft.date"></div>
       </div>
       <div class="card pad col" style="gap:8px">
         <span class="flabel">Medicines</span>
-        ${d.meds.map((m, i) => `<div class="med">
+        ${d.meds.map((m, i) => `<div class="med vm">
           <input class="in m-name" aria-label="Medicine ${i + 1} name" placeholder="Medicine name" value="${esc(m.name)}" data-bind="draft.meds.${i}.name">
           <button class="x-btn m-x" data-act="delMed" data-i="${i}" aria-label="Remove medicine ${i + 1}">${ICON.close}</button>
-          <input class="in m-dur" aria-label="Medicine ${i + 1} duration" placeholder="Duration" value="${esc(m.dur)}" data-bind="draft.meds.${i}.dur">
           <input class="in m-qty" aria-label="Medicine ${i + 1} quantity" inputmode="numeric" placeholder="Qty" value="${esc(m.qty)}" data-bind="draft.meds.${i}.qty">
-          <input class="in m-cost" aria-label="Medicine ${i + 1} price per unit in rupees" inputmode="decimal" placeholder="₹ each" value="${esc(m.cost)}" data-bind="draft.meds.${i}.cost"></div>`).join('')}
+          <input class="in m-cost" aria-label="Medicine ${i + 1} total cost in rupees" inputmode="decimal" placeholder="Total ₹" value="${esc(m.total)}" data-bind="draft.meds.${i}.total">
+          ${schedEditor(m, i)}</div>`).join('')}
         <button class="link-btn" data-act="addMed">${ICON.plus} Add medicine</button>
       </div>
       <div class="card pad col" style="gap:12px">
@@ -441,7 +475,7 @@ function refillSection(a) {
     <div class="row between"><h2 class="label">Medicine restocks</h2>${rf.length ? `<span class="small muted">${plural(rf.length, 'restock')} · ${rs(tot)}</span>` : ''}</div>
     ${!rf.length ? '<div class="card empty" style="padding:18px">No restocks yet. Tap <b>Restock</b> each time you buy the medicines again.</div>'
       : `<div class="card list">${list.map((r) => `<button class="list-item" data-act="editRefill" data-id="${r.id}" style="align-items:flex-start">
-        <span class="col grow" style="gap:3px"><span class="row" style="gap:8px">${visitTag(r)}<span class="t15">${fmtDate(r.date)}</span></span><span class="small">${(r.meds || []).map(medHtml).join('<span style="color:#8A8A93">, </span>')}${r.note ? `<span style="color:#8A8A93"> · ${esc(r.note)}</span>` : ''}</span></span>
+        <span class="col grow" style="gap:3px"><span class="row" style="gap:8px">${visitTag(r)}<span class="t15">${fmtDate(r.date)}</span></span><span class="small">${(r.meds || []).map(refillHtml).join('<span style="color:#8A8A93">, </span>')}${r.note ? `<span style="color:#8A8A93"> · ${esc(r.note)}</span>` : ''}</span></span>
         <span class="t15" style="font-size:14px">${rs(refillTotal(r))}</span></button>`).join('')}</div>
       ${rf.length > 4 ? `<button class="link-btn" data-act="refillsAll" data-id="${a.id}">${showAll ? 'Show fewer' : `Show all ${rf.length}`}</button>` : ''}`}
   </section>`;
@@ -513,7 +547,7 @@ function visitCard(v, n, open, a) {
     </button>
     ${open ? `<div class="visit-body">
       <div class="bill">
-        ${(v.meds || []).map((m) => `<div class="bill-row"><span class="col" style="gap:1px;min-width:0"><span style="font-size:14px">${medHtml(m)}</span>${m.dur || priceNote(m) ? `<span class="small muted" style="font-size:12px">${esc([m.dur, priceNote(m)].filter(Boolean).join(' · '))}</span>` : ''}</span><span style="font-size:14px;font-weight:500">${rs(lineCost(m))}</span></div>`).join('')}
+        ${(v.meds || []).map((m) => `<div class="bill-row"><span class="col" style="gap:1px;min-width:0"><span style="font-size:14px">${medHtml(m)}</span>${schedText(m) || m.dur || priceNote(m) ? `<span class="small muted" style="font-size:12px">${esc([schedText(m), m.dur, priceNote(m)].filter(Boolean).join(' · '))}</span>` : ''}</span><span style="font-size:14px;font-weight:500">${rs(visitLine(m))}</span></div>`).join('')}
         <div class="bill-row"><span class="t15" style="font-size:14px">Doctor fee</span><span style="font-size:14px;font-weight:500">${rs(num(v.fee))}</span></div>
         <div class="bill-row"><span style="font-size:14px;font-weight:700">Visit total</span><span style="font-size:15px;font-weight:700;color:#5B3DF5">${rs(visitTotal(v))}</span></div>
       </div>
@@ -694,7 +728,8 @@ function modalView() {
   if (m.kind === 'person') {
     body = `<h2>${d.id ? 'Edit person' : 'Add person'}</h2>
       <div class="field"><label class="flabel" for="m-name">Name</label><input class="in" id="m-name" value="${esc(d.name)}" data-bind="modal.data.name" placeholder="e.g. Mom" maxlength="30"></div>
-      <div class="field"><span class="flabel">Colour (used in charts)</span><div class="swatches">${PALETTE.map((c) => `<button class="sw ${d.color === c.c ? 'on' : ''}" style="background:${c.c}" data-act="mColor" data-v="${c.c}" aria-label="${c.name}" aria-pressed="${d.color === c.c}"></button>`).join('')}</div></div>
+      <div class="field"><span class="flabel">Colour (used in charts) · each person gets their own</span><div class="swatches">${PALETTE.map((c) => { const taken = S.people.some((x) => x.color === c.c && x.id !== d.id);
+        return `<button class="sw ${d.color === c.c ? 'on' : ''}" style="background:${c.c};${taken ? 'opacity:.18;cursor:not-allowed' : ''}" data-act="mColor" data-v="${c.c}" ${taken ? 'disabled' : ''} aria-label="${c.name}${taken ? ' (taken)' : ''}" aria-pressed="${d.color === c.c}"></button>`; }).join('')}</div></div>
       <div class="btn-row">${d.id ? '<button class="btn danger" data-act="mDeletePerson">Delete</button>' : '<button class="btn" data-act="closeModal">Cancel</button>'}<button class="btn dark" data-act="mSavePerson">Save</button></div>`;
   } else if (m.kind === 'ailment') {
     body = `<h2>${d.id ? 'Edit ailment' : 'New ailment'}</h2>
@@ -705,15 +740,16 @@ function modalView() {
       <div class="field"><label class="flabel" for="m-start">Starting date</label><input class="in" id="m-start" type="date" value="${esc(d.start)}" data-bind="modal.data.start"></div>
       <div class="btn-row">${d.id ? '<button class="btn danger" data-act="mDeleteAilment">Delete</button>' : '<button class="btn" data-act="closeModal">Cancel</button>'}<button class="btn dark" data-act="mSaveAilment">Save</button></div>`;
   } else if (m.kind === 'refill') {
-    const sum = d.meds.reduce((t, x) => t + lineCost(x), 0);
+    const sum = d.meds.reduce((t, x) => t + refillLine(x), 0);
     body = `<h2>${d.id ? 'Edit restock' : 'Restock medicines'}</h2><p class="sub" style="margin-top:-8px">${esc(ailmentOf(d.ailmentId)?.name || '')}${d.prefilled ? ' · filled in from last time, change anything' : ''}</p>
       <div class="field"><label class="flabel" for="m-rfdate">Date bought</label><input class="in" id="m-rfdate" type="date" value="${esc(d.date)}" data-bind="modal.data.date"></div>
       <div class="card pad col" style="gap:8px"><span class="flabel">Medicines</span>
-        ${d.meds.map((x, i) => `<div class="med rf">
+        ${d.meds.map((x, i) => `<div class="med rs">
           <input class="in m-name" aria-label="Medicine ${i + 1} name" placeholder="Medicine name" value="${esc(x.name)}" data-bind="modal.data.meds.${i}.name">
           <button class="x-btn m-x" data-act="rDelMed" data-i="${i}" aria-label="Remove medicine ${i + 1}">${ICON.close}</button>
           <input class="in m-qty" aria-label="Medicine ${i + 1} quantity" inputmode="numeric" placeholder="Qty" value="${esc(x.qty)}" data-bind="modal.data.meds.${i}.qty">
-          <input class="in m-cost" aria-label="Medicine ${i + 1} price per unit in rupees" inputmode="decimal" placeholder="₹ each" value="${esc(x.cost)}" data-bind="modal.data.meds.${i}.cost"></div>`).join('')}
+          <select class="in m-pack" id="mp-${i}" aria-label="Medicine ${i + 1} unit" data-bind="modal.data.meds.${i}.pack" ${isSyrupName(x.name) ? 'disabled' : ''}>${Object.entries(PACKS).map(([k, pk]) => `<option value="${k}" ${(isSyrupName(x.name) ? 'unit' : (x.pack || 'unit')) === k ? 'selected' : ''}>${k === 'unit' && isSyrupName(x.name) ? 'Unit (syrup)' : pk.label}</option>`).join('')}</select>
+          <input class="in m-cost" aria-label="Medicine ${i + 1} price per ${packOf(x).size > 1 ? 'pack' : 'unit'} in rupees" inputmode="decimal" placeholder="₹ each" value="${esc(x.cost)}" data-bind="modal.data.meds.${i}.cost"></div>`).join('')}
         <button class="link-btn" data-act="rAddMed">${ICON.plus} Add medicine</button>
         <div class="totals"><div class="big"><span>Total</span><span id="r-total">${rs(sum)}</span></div></div>
       </div>
@@ -764,7 +800,7 @@ function buildExport() {
       const n = i + 1;
       if (UI.ex.excl.includes(v.id)) return;
       L.push(`• ${vName(v, n)} — ${fmtDate(v.date)}`);
-      for (const m of v.meds || []) L.push(`   - ${medLabel(m)}${m.dur ? ` (${m.dur})` : ''}${num(m.cost) ? ` — ${rs(lineCost(m))}${priceNote(m) ? ` (${priceNote(m)})` : ''}` : ''}`);
+      for (const m of v.meds || []) L.push(`   - ${medLabel(m)}${schedText(m) ? ` [${schedText(m)}]` : ''}${m.dur ? ` (${m.dur})` : ''}${visitLine(m) ? ` — ${rs(visitLine(m))}${priceNote(m) ? ` (${priceNote(m)})` : ''}` : ''}`);
       if (num(v.fee)) L.push(`   Doctor fee: ${rs(num(v.fee))}`);
       if (visitTotal(v)) L.push(`   Visit total: ${rs(visitTotal(v))}`);
       if (v.desc) L.push(`   Notes: ${v.desc.replace(/\n+/g, ' ')}`);
@@ -777,7 +813,7 @@ function buildExport() {
     const rf = UI.ex.refills ? refillsOf(a.id) : [];
     if (rf.length) {
       L.push('Medicine restocks:');
-      for (const r of rf) { const t = refillTotal(r); grand += t; L.push(`• ${fmtDate(r.date)}: ${(r.meds || []).map((m) => medLabel(m) + (priceNote(m) ? ` @ ${priceNote(m)}` : '')).join(', ')}${t ? ` — ${rs(t)}` : ''}${r.note ? ` (${r.note})` : ''}`); }
+      for (const r of rf) { const t = refillTotal(r); grand += t; L.push(`• ${fmtDate(r.date)}: ${(r.meds || []).map(refillText).join(', ')}${t ? ` — ${rs(t)}` : ''}${r.note ? ` (${r.note})` : ''}`); }
     }
     L.push('');
   }
@@ -1104,7 +1140,7 @@ async function runSync() {
     const keepMeta = { ...S.meta };
     S = SAVE_N === startN ? merged : mergeStates(S, merged);
     S.meta = { ...keepMeta, deleted: S.meta.deleted };
-    rebuildHashes(); await DB.put('kv', 'state', S); await DB.put('kv', 'hashes', HASH);
+    rebuildHashes(); rebuildSyrups(); await DB.put('kv', 'state', S); await DB.put('kv', 'hashes', HASH);
     SY.cfg.lastSync = Date.now(); await DB.put('kv', 'syncCfg', SY.cfg);
     if (SAVE_N === startN) { SY.dirty = false; await DB.put('kv', 'syncDirty', false); }
     updateSyncDot();
@@ -1147,9 +1183,9 @@ function syncSection() {
 function startDraft(v, aid) {
   const isNew = !v;
   UI.draft = isNew
-    ? { id: uid(), ailmentId: aid, isNew, name: '', date: today(), meds: [{ name: '', qty: '', dur: '', cost: '' }], fee: '', desc: '', files: [], voice: [], added: [], removed: [], created: Date.now() }
-    : { ...JSON.parse(JSON.stringify(v)), isNew, added: [], removed: [], meds: (v.meds || []).map((m) => ({ ...m, cost: m.cost === 0 || m.cost === '' ? '' : String(m.cost) })), fee: v.fee ? String(v.fee) : '' };
-  if (!UI.draft.meds.length) UI.draft.meds.push({ name: '', qty: '', dur: '', cost: '' });
+    ? { id: uid(), ailmentId: aid, isNew, name: '', date: today(), meds: [newMed()], fee: '', desc: '', files: [], voice: [], added: [], removed: [], created: Date.now() }
+    : { ...JSON.parse(JSON.stringify(v)), isNew, added: [], removed: [], meds: (v.meds || []).map((m) => ({ ...newMed(), name: m.name, qty: m.qty || '', dur: m.dur || '', total: visitLine(m) ? String(Math.round(visitLine(m) * 100) / 100) : '', form: m.form || 'tablet', times: [...(m.times || [])], meal: m.meal || '', portion: m.portion || 'full', ml: m.ml ? String(m.ml) : '' })), fee: v.fee ? String(v.fee) : '' };
+  if (!UI.draft.meds.length) UI.draft.meds.push(newMed());
   go({ name: 'visitEdit' });
 }
 async function cancelDraft() {
@@ -1163,7 +1199,9 @@ async function saveDraft() {
   if (!d.date) return toast('Please pick a date');
   const v = {
     id: d.id, ailmentId: d.ailmentId, name: AUTO_NAME.test((d.name || '').trim()) ? '' : d.name.trim(), date: d.date,
-    meds: d.meds.filter((m) => (m.name || '').trim()).map((m) => ({ name: m.name.trim(), qty: String(m.qty || '').trim(), dur: (m.dur || '').trim(), cost: num(m.cost) })),
+    meds: d.meds.filter((m) => (m.name || '').trim()).map((m) => ({ name: m.name.trim(), qty: String(m.qty || '').trim(), ...(m.dur ? { dur: m.dur } : {}), total: num(m.total),
+      form: m.form === 'syrup' ? 'syrup' : 'tablet', times: TIMES.map((t) => t[0]).filter((t) => (m.times || []).includes(t)), meal: m.meal || '',
+      ...(m.form === 'syrup' ? { ml: num(m.ml) } : { portion: m.portion === 'half' ? 'half' : 'full' }) })),
     fee: num(d.fee), desc: (d.desc || '').trim(), files: d.files, voice: d.voice, created: d.created || Date.now(), updated: Date.now()
   };
   const i = S.visits.findIndex((x) => x.id === v.id);
@@ -1172,6 +1210,25 @@ async function saveDraft() {
   await delBlobs(d.removed);
   UI.draft = null; UI.openVisit[v.ailmentId] = v.id; stopAudio();
   back(); toast('Visit saved');
+}
+function schedEditor(m, i) {
+  const syrup = m.form === 'syrup'; const times = m.times || [];
+  const opt = (act, v, on, label, shape) => `<button class="opt ${on ? 'on' : ''}" data-act="${act}" data-i="${i}" data-v="${v}" aria-pressed="${on}"><span>${label}</span><i class="${shape}">${on && shape === 'sq' ? ICON.check : ''}</i></button>`;
+  return `<div class="sched">
+    <div class="row" style="gap:10px"><label class="flabel" for="mf-${i}" style="min-width:64px">Type</label>
+      <select class="in" id="mf-${i}" data-bind="draft.meds.${i}.form" style="flex:1"><option value="tablet" ${!syrup ? 'selected' : ''}>Tablet</option><option value="syrup" ${syrup ? 'selected' : ''}>Syrup</option></select></div>
+    <span class="flabel">When to take</span>
+    <div class="tri">${TIMES.map(([v, l]) => opt('medTime', v, times.includes(v), l, 'rdot')).join('')}</div>
+    <div class="duo">${opt('medMeal', 'before', m.meal === 'before', 'Before meal', 'sq')}${opt('medMeal', 'after', m.meal === 'after', 'After meal', 'sq')}</div>
+    ${syrup ? `<div class="row" style="gap:10px"><label class="flabel" for="ml-${i}" style="min-width:64px">How much</label>
+        <div class="ml-wrap"><input class="in" id="ml-${i}" inputmode="decimal" placeholder="e.g. 20" value="${esc(m.ml)}" data-bind="draft.meds.${i}.ml"><span>ml</span></div></div>`
+      : `<span class="flabel">Portion of tablet</span><div class="duo">${opt('medPortion', 'full', m.portion !== 'half', 'Full', 'rdot')}${opt('medPortion', 'half', m.portion === 'half', 'Half', 'rdot')}</div>`}
+  </div>`;
+}
+function draftLabel(d) {
+  const others = visitsOf(d.ailmentId).filter((v) => v.id !== d.id);
+  const n = others.filter((v) => (v.date || '') < d.date || ((v.date || '') === d.date && (v.created || 0) <= (d.created || Date.now()))).length + 1;
+  return 'Visit-' + n;
 }
 function updateTotals() {
   const d = UI.draft; if (!d) return;
@@ -1205,6 +1262,7 @@ const ACTIONS = {
   mColor: (el) => { UI.modal.data.color = el.dataset.v; renderModal(); },
   mSavePerson: async () => {
     const d = UI.modal.data; const name = (d.name || '').trim(); if (!name) return toast('Please enter a name');
+    if (S.people.some((x) => x.color === d.color && x.id !== d.id)) return toast('That colour is taken. Pick another.');
     if (d.id) Object.assign(personOf(d.id), { name, color: d.color });
     else S.people.push({ id: uid(), name, color: d.color, created: Date.now() });
     await save(); closeModal(); render();
@@ -1256,8 +1314,11 @@ const ACTIONS = {
     cancelDraft();
   },
   saveVisit: () => saveDraft(),
-  addMed: () => { UI.draft.meds.push({ name: '', qty: '', dur: '', cost: '' }); render(); const ins = document.querySelectorAll('.med .m-name'); ins[ins.length - 1]?.focus(); },
-  delMed: (el) => { UI.draft.meds.splice(+el.dataset.i, 1); if (!UI.draft.meds.length) UI.draft.meds.push({ name: '', qty: '', dur: '', cost: '' }); render(); },
+  addMed: () => { UI.draft.meds.push(newMed()); render(); const ins = document.querySelectorAll('.med .m-name'); ins[ins.length - 1]?.focus(); },
+  medTime: (el) => { const m = UI.draft.meds[+el.dataset.i]; const v = el.dataset.v; m.times = (m.times || []).includes(v) ? m.times.filter((x) => x !== v) : [...(m.times || []), v]; render(); },
+  medMeal: (el) => { const m = UI.draft.meds[+el.dataset.i]; m.meal = m.meal === el.dataset.v ? '' : el.dataset.v; render(); },
+  medPortion: (el) => { UI.draft.meds[+el.dataset.i].portion = el.dataset.v; render(); },
+  delMed: (el) => { UI.draft.meds.splice(+el.dataset.i, 1); if (!UI.draft.meds.length) UI.draft.meds.push(newMed()); render(); },
   delFile: (el) => { const d = UI.draft; const [f] = d.files.splice(+el.dataset.i, 1); if (f) { if (d.added.includes(f.id)) { d.added = d.added.filter((x) => x !== f.id); delBlobs([f.id]); } else d.removed.push(f.id); } render(); },
   delVoice: (el) => { const d = UI.draft; const [n] = d.voice.splice(+el.dataset.i, 1); if (n) { if (AUD.id === n.id) stopAudio(); if (d.added.includes(n.id)) { d.added = d.added.filter((x) => x !== n.id); delBlobs([n.id]); } else d.removed.push(n.id); } render(); },
   pick: (el) => document.getElementById(el.dataset.input).click(),
@@ -1302,15 +1363,17 @@ const ACTIONS = {
   },
   newRefill: (el) => {
     const aid = el.dataset.id; const last = refillsOf(aid).slice(-1)[0]; const lv = visitsOf(aid).slice(-1)[0];
-    const src = ((last?.meds?.length ? last.meds : lv?.meds) || []).map((m) => ({ name: m.name, qty: m.qty || '', cost: m.cost ? String(m.cost) : '' }));
-    openModal('refill', { ailmentId: aid, date: today(), meds: src.length ? src : [{ name: '', qty: '', cost: '' }], note: '', prefilled: src.length > 0 });
+    const src = last?.meds?.length
+      ? last.meds.map((m) => ({ name: m.name, qty: m.qty || '', pack: isSyrupName(m.name) ? 'unit' : (m.pack || 'unit'), cost: m.cost ? String(m.cost) : '' }))
+      : (lv?.meds || []).map((m) => { const q = num(m.qty) || 1, t = visitLine(m); return { name: m.name, qty: m.qty || '', pack: 'unit', cost: t ? String(Math.round(t / q * 100) / 100) : '' }; });
+    openModal('refill', { ailmentId: aid, date: today(), meds: src.length ? src : [{ name: '', qty: '', pack: 'unit', cost: '' }], note: '', prefilled: src.length > 0 });
   },
-  editRefill: (el) => { const r = S.refills.find((x) => x.id === el.dataset.id); if (r) openModal('refill', { ...r, meds: (r.meds || []).map((m) => ({ ...m, qty: m.qty || '', cost: m.cost ? String(m.cost) : '' })) }); },
-  rAddMed: () => { UI.modal.data.meds.push({ name: '', qty: '', cost: '' }); renderModal(); },
-  rDelMed: (el) => { const ms = UI.modal.data.meds; ms.splice(+el.dataset.i, 1); if (!ms.length) ms.push({ name: '', qty: '', cost: '' }); renderModal(); },
+  editRefill: (el) => { const r = S.refills.find((x) => x.id === el.dataset.id); if (r) openModal('refill', { ...r, meds: (r.meds || []).map((m) => ({ ...m, qty: m.qty || '', pack: m.pack || 'unit', cost: m.cost ? String(m.cost) : '' })) }); },
+  rAddMed: () => { UI.modal.data.meds.push({ name: '', qty: '', pack: 'unit', cost: '' }); renderModal(); },
+  rDelMed: (el) => { const ms = UI.modal.data.meds; ms.splice(+el.dataset.i, 1); if (!ms.length) ms.push({ name: '', qty: '', pack: 'unit', cost: '' }); renderModal(); },
   mSaveRefill: async () => {
     const d = UI.modal.data; if (!d.date) return toast('Please pick a date');
-    const meds = d.meds.filter((m) => (m.name || '').trim()).map((m) => ({ name: m.name.trim(), qty: String(m.qty || '').trim(), cost: num(m.cost) }));
+    const meds = d.meds.filter((m) => (m.name || '').trim()).map((m) => ({ name: m.name.trim(), qty: String(m.qty || '').trim(), pack: isSyrupName(m.name) ? 'unit' : (PACKS[m.pack] ? m.pack : 'unit'), cost: num(m.cost) }));
     if (!meds.length) return toast('Add at least one medicine');
     const r = { id: d.id || uid(), ailmentId: d.ailmentId, date: d.date, meds, note: (d.note || '').trim(), created: d.created || Date.now(), updated: Date.now() };
     const i = S.refills.findIndex((x) => x.id === r.id); if (i >= 0) S.refills[i] = r; else S.refills.push(r);
@@ -1407,8 +1470,17 @@ function onBind(ev) {
   const el = ev.target; const path = el.dataset && el.dataset.bind; if (!path) return;
   setPath(path, el.value);
   if (path.startsWith('search.')) { const hb = $('#home-body'); if (hb) hb.innerHTML = homeBody(); }
-  if (path.startsWith('draft.') && (path.endsWith('.cost') || path.endsWith('.qty') || path === 'draft.fee')) updateTotals();
-  if (path.startsWith('modal.data.meds') && (path.endsWith('.cost') || path.endsWith('.qty'))) { const el2 = document.getElementById('r-total'); if (el2) el2.textContent = rs(UI.modal.data.meds.reduce((t, x) => t + lineCost(x), 0)); }
+  if (path.startsWith('draft.') && (path.endsWith('.total') || path.endsWith('.qty') || path === 'draft.fee')) updateTotals();
+  if (/^draft\.meds\.\d+\.form$/.test(path)) render();
+  const nm = /^modal\.data\.meds\.(\d+)\.name$/.exec(path);
+  if (nm && UI.modal?.kind === 'refill') {
+    const i = +nm[1]; const x = UI.modal.data.meds[i]; const sel = document.getElementById('mp-' + i); const syr = isSyrupName(x.name);
+    if (syr) x.pack = 'unit';
+    if (sel) { sel.disabled = syr; sel.value = x.pack || 'unit'; sel.options[0].textContent = syr ? 'Unit (syrup)' : 'Unit'; }
+    const el2 = document.getElementById('r-total'); if (el2) el2.textContent = rs(UI.modal.data.meds.reduce((t, y) => t + refillLine(y), 0));
+  }
+  if (path === 'draft.date') { const lb = document.getElementById('v-label'); if (lb && UI.draft) lb.textContent = draftLabel(UI.draft); }
+  if (path.startsWith('modal.data.meds') && (path.endsWith('.cost') || path.endsWith('.qty') || path.endsWith('.pack'))) { const el2 = document.getElementById('r-total'); if (el2) el2.textContent = rs(UI.modal.data.meds.reduce((t, x) => t + refillLine(x), 0)); }
 }
 document.addEventListener('input', onBind);
 document.addEventListener('change', (ev) => {
@@ -1447,6 +1519,7 @@ document.addEventListener('focusout', () => { setTimeout(() => { if (!document.a
     await DB.open();
     const st = await DB.get('kv', 'state'); if (st) S = normalize(st);
     UI.pin = (await DB.get('kv', 'pin')) || null;
+    rebuildSyrups();
     const hs = await DB.get('kv', 'hashes'); if (hs) HASH = hs; else rebuildHashes();
     SY.cfg = (await DB.get('kv', 'syncCfg')) || null;
     SY.dirty = !!(SY.cfg?.on && (await DB.get('kv', 'syncDirty')));
