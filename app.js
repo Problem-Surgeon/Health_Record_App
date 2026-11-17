@@ -1,6 +1,6 @@
 'use strict';
 /* Health Records — offline web app. All data stays on this device (IndexedDB). */
-const APP_VERSION = '2.8';
+const APP_VERSION = '2.9';
 
 /* ---------------- helpers ---------------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -171,10 +171,15 @@ const refillTotal = (r) => (r.meds || []).reduce((s, m) => s + refillLine(m), 0)
 const medHtml = (m) => ((m.qty || '').toString().trim() ? `<span style="color:#8A8A93">${esc(String(m.qty).trim())} ×</span> ` : '') + `<span style="color:#26262C;font-weight:500">${esc(m.name || '')}</span>`;
 const rs2 = (n) => '₹' + (Math.round(n * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 // visit line: price per unit worked out from total ÷ qty
-const priceNote = (m) => { const t = visitLine(m), q = num(m.qty); return t && q > 1 ? `${rs2(t / q)} each` : ''; };
+const priceNote = (m) => {
+  const t = visitLine(m), q = num(m.qty) || 1, u = unitsOf(m); if (!t) return '';
+  if (packOf(m).size > 1) return `${rs2(t / q)} per pack · ${rs2(t / u)} per tablet`;
+  return q > 1 ? `${rs2(t / q)} each` : '';
+};
 // restock line: "3 × Pack of 10 · 30 units"
 const refillHtml = (m) => { const pk = packOf(m); const q = (m.qty || '').toString().trim();
   return `${q ? `<span style="color:#8A8A93">${esc(q)} ×</span> ` : ''}<span style="color:#26262C;font-weight:500">${esc(m.name || '')}</span>${pk.size > 1 && q ? `<span style="color:#8A8A93"> (${esc(pk.label.toLowerCase())} · ${unitsOf(m)} units)</span>` : ''}`; };
+const packText = (m) => { const pk = packOf(m); const q = (m.qty || '').toString().trim(); return `${q ? q + ' × ' : ''}${m.name || ''}${pk.size > 1 && q ? ` (${pk.label.toLowerCase()}, ${unitsOf(m)} units)` : ''}`; };
 const refillText = (m) => { const pk = packOf(m); const q = (m.qty || '').toString().trim();
   return `${q ? q + ' × ' : ''}${m.name || ''}${pk.size > 1 && q ? ` (${pk.label.toLowerCase()}, ${unitsOf(m)} units)` : ''}${num(m.cost) ? ` @ ${rs2(num(m.cost))} per ${pk.size > 1 ? 'pack' : 'unit'}` : ''}`; };
 // Syrups are bought one bottle at a time, never in packs of 10/15.
@@ -188,7 +193,8 @@ function rebuildSyrups() {
 }
 const isSyrupName = (name) => SYRUPS.has(normName(name));
 const TIMES = [['morning', 'Morning'], ['noon', 'Noon'], ['night', 'Night']];
-const newMed = () => ({ name: '', qty: '', total: '', form: 'tablet', times: [], meal: '', portion: 'full', ml: '' });
+const defPack = (aid) => (ailmentOf(aid)?.type === 'chronic' ? 'pack10' : 'unit');
+const newMed = (pack = 'unit') => ({ name: '', qty: '', total: '', pack, form: 'tablet', times: [], meal: '', portion: 'full', ml: '' });
 // "Tablet · ½ · Morning, Night · after meal" / "Syrup · 20 ml · Morning · before meal"
 function schedText(m) {
   const times = (m.times || []).map((t) => (TIMES.find((x) => x[0] === t) || [])[1]).filter(Boolean);
@@ -365,10 +371,11 @@ const VIEWS = {
       </div>
       <div class="card pad col" style="gap:8px">
         <span class="flabel">Medicines</span>
-        ${d.meds.map((m, i) => `<div class="med vm">
+        ${d.meds.map((m, i) => `<div class="med vm rs">
           <input class="in m-name" aria-label="Medicine ${i + 1} name" placeholder="Medicine name" value="${esc(m.name)}" data-bind="draft.meds.${i}.name">
           <button class="x-btn m-x" data-act="delMed" data-i="${i}" aria-label="Remove medicine ${i + 1}">${ICON.close}</button>
           <input class="in m-qty" aria-label="Medicine ${i + 1} quantity" inputmode="numeric" placeholder="Qty" value="${esc(m.qty)}" data-bind="draft.meds.${i}.qty">
+          <select class="in m-pack" aria-label="Medicine ${i + 1} unit" data-bind="draft.meds.${i}.pack" ${m.form === 'syrup' ? 'disabled' : ''}>${Object.entries(PACKS).map(([k, pk]) => `<option value="${k}" ${(m.form === 'syrup' ? 'unit' : (m.pack || 'unit')) === k ? 'selected' : ''}>${k === 'unit' && m.form === 'syrup' ? 'Unit (syrup)' : pk.label}</option>`).join('')}</select>
           <input class="in m-cost" aria-label="Medicine ${i + 1} total cost in rupees" inputmode="decimal" placeholder="Total ₹" value="${esc(m.total)}" data-bind="draft.meds.${i}.total">
           ${schedEditor(m, i)}</div>`).join('')}
         <button class="link-btn" data-act="addMed">${ICON.plus} Add medicine</button>
@@ -455,7 +462,7 @@ const VIEWS = {
         <button class="list-item" data-act="lockNow"><span class="grow t15">Lock now</span>${ICON.chev}</button>
         <button class="list-item" data-act="eraseAll"><span class="grow t15" style="color:#B42318">Erase all data</span>${ICON.chev}</button>
       </section>
-      <p class="small muted" style="margin:0;text-align:center">Health Records v${APP_VERSION} · works offline</p>
+      <p class="small muted" style="margin:0;text-align:center">Health Records v${APP_VERSION} · Made by Dhruvik</p>
     </main>${navBar('settings')}`;
   }
 };
@@ -547,7 +554,7 @@ function visitCard(v, n, open, a) {
     </button>
     ${open ? `<div class="visit-body">
       <div class="bill">
-        ${(v.meds || []).map((m) => `<div class="bill-row"><span class="col" style="gap:1px;min-width:0"><span style="font-size:14px">${medHtml(m)}</span>${schedText(m) || m.dur || priceNote(m) ? `<span class="small muted" style="font-size:12px">${esc([schedText(m), m.dur, priceNote(m)].filter(Boolean).join(' · '))}</span>` : ''}</span><span style="font-size:14px;font-weight:500">${rs(visitLine(m))}</span></div>`).join('')}
+        ${(v.meds || []).map((m) => `<div class="bill-row"><span class="col" style="gap:1px;min-width:0"><span style="font-size:14px">${refillHtml(m)}</span>${schedText(m) || m.dur || priceNote(m) ? `<span class="small muted" style="font-size:12px">${esc([schedText(m), m.dur, priceNote(m)].filter(Boolean).join(' · '))}</span>` : ''}</span><span style="font-size:14px;font-weight:500">${rs(visitLine(m))}</span></div>`).join('')}
         <div class="bill-row"><span class="t15" style="font-size:14px">Doctor fee</span><span style="font-size:14px;font-weight:500">${rs(num(v.fee))}</span></div>
         <div class="bill-row"><span style="font-size:14px;font-weight:700">Visit total</span><span style="font-size:15px;font-weight:700;color:#5B3DF5">${rs(visitTotal(v))}</span></div>
       </div>
@@ -800,7 +807,7 @@ function buildExport() {
       const n = i + 1;
       if (UI.ex.excl.includes(v.id)) return;
       L.push(`• ${vName(v, n)} — ${fmtDate(v.date)}`);
-      for (const m of v.meds || []) L.push(`   - ${medLabel(m)}${schedText(m) ? ` [${schedText(m)}]` : ''}${m.dur ? ` (${m.dur})` : ''}${visitLine(m) ? ` — ${rs(visitLine(m))}${priceNote(m) ? ` (${priceNote(m)})` : ''}` : ''}`);
+      for (const m of v.meds || []) L.push(`   - ${packText(m)}${schedText(m) ? ` [${schedText(m)}]` : ''}${m.dur ? ` (${m.dur})` : ''}${visitLine(m) ? ` — ${rs(visitLine(m))}${priceNote(m) ? ` (${priceNote(m)})` : ''}` : ''}`);
       if (num(v.fee)) L.push(`   Doctor fee: ${rs(num(v.fee))}`);
       if (visitTotal(v)) L.push(`   Visit total: ${rs(visitTotal(v))}`);
       if (v.desc) L.push(`   Notes: ${v.desc.replace(/\n+/g, ' ')}`);
@@ -1183,9 +1190,9 @@ function syncSection() {
 function startDraft(v, aid) {
   const isNew = !v;
   UI.draft = isNew
-    ? { id: uid(), ailmentId: aid, isNew, name: '', date: today(), meds: [newMed()], fee: '', desc: '', files: [], voice: [], added: [], removed: [], created: Date.now() }
-    : { ...JSON.parse(JSON.stringify(v)), isNew, added: [], removed: [], meds: (v.meds || []).map((m) => ({ ...newMed(), name: m.name, qty: m.qty || '', dur: m.dur || '', total: visitLine(m) ? String(Math.round(visitLine(m) * 100) / 100) : '', form: m.form || 'tablet', times: [...(m.times || [])], meal: m.meal || '', portion: m.portion || 'full', ml: m.ml ? String(m.ml) : '' })), fee: v.fee ? String(v.fee) : '' };
-  if (!UI.draft.meds.length) UI.draft.meds.push(newMed());
+    ? { id: uid(), ailmentId: aid, isNew, name: '', date: today(), meds: [newMed(defPack(aid))], fee: '', desc: '', files: [], voice: [], added: [], removed: [], created: Date.now() }
+    : { ...JSON.parse(JSON.stringify(v)), isNew, added: [], removed: [], meds: (v.meds || []).map((m) => ({ ...newMed(), name: m.name, qty: m.qty || '', pack: m.form === 'syrup' ? 'unit' : (m.pack || 'unit'), dur: m.dur || '', total: visitLine(m) ? String(Math.round(visitLine(m) * 100) / 100) : '', form: m.form || 'tablet', times: [...(m.times || [])], meal: m.meal || '', portion: m.portion || 'full', ml: m.ml ? String(m.ml) : '' })), fee: v.fee ? String(v.fee) : '' };
+  if (!UI.draft.meds.length) UI.draft.meds.push(newMed(defPack(aid)));
   go({ name: 'visitEdit' });
 }
 async function cancelDraft() {
@@ -1200,7 +1207,7 @@ async function saveDraft() {
   const v = {
     id: d.id, ailmentId: d.ailmentId, name: AUTO_NAME.test((d.name || '').trim()) ? '' : d.name.trim(), date: d.date,
     meds: d.meds.filter((m) => (m.name || '').trim()).map((m) => ({ name: m.name.trim(), qty: String(m.qty || '').trim(), ...(m.dur ? { dur: m.dur } : {}), total: num(m.total),
-      form: m.form === 'syrup' ? 'syrup' : 'tablet', times: TIMES.map((t) => t[0]).filter((t) => (m.times || []).includes(t)), meal: m.meal || '',
+      pack: m.form === 'syrup' ? 'unit' : (PACKS[m.pack] ? m.pack : 'unit'), form: m.form === 'syrup' ? 'syrup' : 'tablet', times: TIMES.map((t) => t[0]).filter((t) => (m.times || []).includes(t)), meal: m.meal || '',
       ...(m.form === 'syrup' ? { ml: num(m.ml) } : { portion: m.portion === 'half' ? 'half' : 'full' }) })),
     fee: num(d.fee), desc: (d.desc || '').trim(), files: d.files, voice: d.voice, created: d.created || Date.now(), updated: Date.now()
   };
@@ -1314,11 +1321,11 @@ const ACTIONS = {
     cancelDraft();
   },
   saveVisit: () => saveDraft(),
-  addMed: () => { UI.draft.meds.push(newMed()); render(); const ins = document.querySelectorAll('.med .m-name'); ins[ins.length - 1]?.focus(); },
+  addMed: () => { UI.draft.meds.push(newMed(defPack(UI.draft.ailmentId))); render(); const ins = document.querySelectorAll('.med .m-name'); ins[ins.length - 1]?.focus(); },
   medTime: (el) => { const m = UI.draft.meds[+el.dataset.i]; const v = el.dataset.v; m.times = (m.times || []).includes(v) ? m.times.filter((x) => x !== v) : [...(m.times || []), v]; render(); },
   medMeal: (el) => { const m = UI.draft.meds[+el.dataset.i]; m.meal = m.meal === el.dataset.v ? '' : el.dataset.v; render(); },
   medPortion: (el) => { UI.draft.meds[+el.dataset.i].portion = el.dataset.v; render(); },
-  delMed: (el) => { UI.draft.meds.splice(+el.dataset.i, 1); if (!UI.draft.meds.length) UI.draft.meds.push(newMed()); render(); },
+  delMed: (el) => { UI.draft.meds.splice(+el.dataset.i, 1); if (!UI.draft.meds.length) UI.draft.meds.push(newMed(defPack(UI.draft.ailmentId))); render(); },
   delFile: (el) => { const d = UI.draft; const [f] = d.files.splice(+el.dataset.i, 1); if (f) { if (d.added.includes(f.id)) { d.added = d.added.filter((x) => x !== f.id); delBlobs([f.id]); } else d.removed.push(f.id); } render(); },
   delVoice: (el) => { const d = UI.draft; const [n] = d.voice.splice(+el.dataset.i, 1); if (n) { if (AUD.id === n.id) stopAudio(); if (d.added.includes(n.id)) { d.added = d.added.filter((x) => x !== n.id); delBlobs([n.id]); } else d.removed.push(n.id); } render(); },
   pick: (el) => document.getElementById(el.dataset.input).click(),
@@ -1365,12 +1372,12 @@ const ACTIONS = {
     const aid = el.dataset.id; const last = refillsOf(aid).slice(-1)[0]; const lv = visitsOf(aid).slice(-1)[0];
     const src = last?.meds?.length
       ? last.meds.map((m) => ({ name: m.name, qty: m.qty || '', pack: isSyrupName(m.name) ? 'unit' : (m.pack || 'unit'), cost: m.cost ? String(m.cost) : '' }))
-      : (lv?.meds || []).map((m) => { const q = num(m.qty) || 1, t = visitLine(m); return { name: m.name, qty: m.qty || '', pack: 'unit', cost: t ? String(Math.round(t / q * 100) / 100) : '' }; });
-    openModal('refill', { ailmentId: aid, date: today(), meds: src.length ? src : [{ name: '', qty: '', pack: 'unit', cost: '' }], note: '', prefilled: src.length > 0 });
+      : (lv?.meds || []).map((m) => { const q = num(m.qty) || 1, t = visitLine(m); return { name: m.name, qty: m.qty || '', pack: isSyrupName(m.name) || m.form === 'syrup' ? 'unit' : (m.pack || 'unit'), cost: t ? String(Math.round(t / q * 100) / 100) : '' }; });
+    openModal('refill', { ailmentId: aid, date: today(), meds: src.length ? src : [{ name: '', qty: '', pack: 'pack10', cost: '' }], note: '', prefilled: src.length > 0 });
   },
   editRefill: (el) => { const r = S.refills.find((x) => x.id === el.dataset.id); if (r) openModal('refill', { ...r, meds: (r.meds || []).map((m) => ({ ...m, qty: m.qty || '', pack: m.pack || 'unit', cost: m.cost ? String(m.cost) : '' })) }); },
-  rAddMed: () => { UI.modal.data.meds.push({ name: '', qty: '', pack: 'unit', cost: '' }); renderModal(); },
-  rDelMed: (el) => { const ms = UI.modal.data.meds; ms.splice(+el.dataset.i, 1); if (!ms.length) ms.push({ name: '', qty: '', pack: 'unit', cost: '' }); renderModal(); },
+  rAddMed: () => { UI.modal.data.meds.push({ name: '', qty: '', pack: 'pack10', cost: '' }); renderModal(); },
+  rDelMed: (el) => { const ms = UI.modal.data.meds; ms.splice(+el.dataset.i, 1); if (!ms.length) ms.push({ name: '', qty: '', pack: 'pack10', cost: '' }); renderModal(); },
   mSaveRefill: async () => {
     const d = UI.modal.data; if (!d.date) return toast('Please pick a date');
     const meds = d.meds.filter((m) => (m.name || '').trim()).map((m) => ({ name: m.name.trim(), qty: String(m.qty || '').trim(), pack: isSyrupName(m.name) ? 'unit' : (PACKS[m.pack] ? m.pack : 'unit'), cost: num(m.cost) }));
@@ -1471,7 +1478,7 @@ function onBind(ev) {
   setPath(path, el.value);
   if (path.startsWith('search.')) { const hb = $('#home-body'); if (hb) hb.innerHTML = homeBody(); }
   if (path.startsWith('draft.') && (path.endsWith('.total') || path.endsWith('.qty') || path === 'draft.fee')) updateTotals();
-  if (/^draft\.meds\.\d+\.form$/.test(path)) render();
+  if (/^draft\.meds\.\d+\.form$/.test(path)) { const i = +path.split('.')[2]; if (UI.draft.meds[i].form === 'syrup') UI.draft.meds[i].pack = 'unit'; render(); }
   const nm = /^modal\.data\.meds\.(\d+)\.name$/.exec(path);
   if (nm && UI.modal?.kind === 'refill') {
     const i = +nm[1]; const x = UI.modal.data.meds[i]; const sel = document.getElementById('mp-' + i); const syr = isSyrupName(x.name);
