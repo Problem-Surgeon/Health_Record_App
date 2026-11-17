@@ -1,6 +1,6 @@
 'use strict';
 /* Health Records — offline web app. All data stays on this device (IndexedDB). */
-const APP_VERSION = '2.0';
+const APP_VERSION = '2.1';
 
 /* ---------------- helpers ---------------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -144,6 +144,7 @@ async function save() {
   stamp(); SAVE_N++;
   try { await DB.put('kv', 'state', S); await DB.put('kv', 'hashes', HASH); }
   catch (e) { toast('Could not save. Your phone may be out of storage.'); throw e; }
+  if (SY.cfg?.on && !SY.dirty) { SY.dirty = true; DB.put('kv', 'syncDirty', true).catch(() => {}); updateSyncDot(); }
   scheduleSync();
 }
 
@@ -235,7 +236,7 @@ const VIEWS = {
     return `<main class="screen">
       <div class="row between">
         <div class="col"><h1>Health Records</h1><p class="sub">${plural(S.people.length, 'person').replace('persons', 'people')} · ${plural(nA, 'ailment')}</p></div>
-        <span class="row" style="gap:8px">${SY.cfg?.on ? `<button class="icon-btn" data-act="syncNow" aria-label="Sync now" id="sync-btn">${ICON.cloud}</button>` : ''}<button class="icon-btn" data-act="lockNow" aria-label="Lock app">${ICON.lock}</button></span>
+        <span class="row" style="gap:8px">${SY.cfg?.on ? `<button class="icon-btn" data-act="syncNow" aria-label="${SY.dirty ? 'Sync now (changes not synced yet)' : 'Sync now'}" id="sync-btn">${ICON.cloud}${SY.dirty ? '<span class="sync-dot" aria-hidden="true"></span>' : ''}</button>` : ''}<button class="icon-btn" data-act="lockNow" aria-label="Lock app">${ICON.lock}</button></span>
       </div>
       <div class="search" role="search">
         <label class="sr" for="s-person">Person</label>
@@ -928,7 +929,7 @@ async function fillStorageInfo() {
 /* ---------------- encrypted Google Drive sync ---------------- */
 const SYNC_FILE = 'health-sync.json';
 const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
-const SY = { cfg: null, key: null, token: null, exp: 0, gis: null, tokenClient: null, pending: null, busy: false, msg: '', timer: null };
+const SY = { dirty: false, cfg: null, key: null, token: null, exp: 0, gis: null, tokenClient: null, pending: null, busy: false, msg: '', timer: null };
 const clientId = () => String(window.GOOGLE_CLIENT_ID || '').trim();
 
 async function deriveKey(pw, saltB64, iter) {
@@ -974,6 +975,12 @@ function withToken(fn) {
   if (!SY.tokenClient) { loadGis(); return toast('Connecting to Google… tap again in a moment'); }
   SY.pending = fn;
   SY.tokenClient.requestAccessToken({ prompt: SY.cfg?.consented ? '' : 'consent' });
+}
+function updateSyncDot() {
+  const b = document.getElementById('sync-btn'); if (!b) return;
+  b.querySelector('.sync-dot')?.remove();
+  if (SY.dirty) b.insertAdjacentHTML('beforeend', '<span class="sync-dot" aria-hidden="true"></span>');
+  b.setAttribute('aria-label', SY.dirty ? 'Sync now (changes not synced yet)' : 'Sync now');
 }
 function setSyncMsg(m) { SY.msg = m; const el = $('#sync-status'); if (el) el.textContent = m; }
 function syncError(e) {
@@ -1069,6 +1076,8 @@ async function runSync() {
     S.meta = { ...keepMeta, deleted: S.meta.deleted };
     rebuildHashes(); await DB.put('kv', 'state', S); await DB.put('kv', 'hashes', HASH);
     SY.cfg.lastSync = Date.now(); await DB.put('kv', 'syncCfg', SY.cfg);
+    if (SAVE_N === startN) { SY.dirty = false; await DB.put('kv', 'syncDirty', false); }
+    updateSyncDot();
     setSyncMsg(missing ? `Synced, but ${plural(missing, 'file')} haven’t arrived yet. Sync again on the other device.` : 'Synced');
     if (SAVE_N !== startN) scheduleSync();
     if (!UI.locked && !UI.modal && cur().name !== 'visitEdit') render();
@@ -1080,8 +1089,8 @@ function scheduleSync(ms = 6000) {
   clearTimeout(SY.timer); SY.timer = setTimeout(runSync, ms);
 }
 async function syncForget() {
-  SY.cfg = null; SY.key = null; SY.token = null; SY.exp = 0; SY.msg = '';
-  for (const k of ['syncCfg', 'syncKey', 'syncToken']) await DB.del('kv', k).catch(() => {});
+  SY.cfg = null; SY.key = null; SY.token = null; SY.exp = 0; SY.msg = ''; SY.dirty = false;
+  for (const k of ['syncCfg', 'syncKey', 'syncToken', 'syncDirty']) await DB.del('kv', k).catch(() => {});
 }
 async function wipeLocal() {
   await DB.clear('blobs'); S = normalize({}); HASH = {}; await syncForget(); await save();
@@ -1096,7 +1105,7 @@ function syncSection() {
     <span class="small muted" id="sync-status">${esc(SY.msg)}</span></section>`;
   return `<section class="card pad col" style="gap:12px">
     <div class="row between"><span class="t15">Sync with Google Drive</span><span class="chip" style="background:#E6F6EC;color:#1E7A4D">On</span></div>
-    <span class="small" style="color:#3A3A42">Last synced: ${agoText(SY.cfg.lastSync)}</span>
+    <span class="small" style="color:#3A3A42">Last synced: ${agoText(SY.cfg.lastSync)}${SY.dirty ? ' · <b style="color:#B42318">changes not synced yet</b>' : ''}</span>
     <span class="small muted" id="sync-status">${esc(SY.msg)}</span>
     <button class="btn primary" data-act="syncNow">${ICON.cloud} Sync now</button>
     <p class="small muted" style="margin:0;line-height:1.5">Changes sync by themselves for about an hour after you tap Sync now. After that, tap it again (Google asks you to sign in again every hour).</p>
@@ -1397,6 +1406,7 @@ document.addEventListener('visibilitychange', () => {
     UI.pin = (await DB.get('kv', 'pin')) || null;
     const hs = await DB.get('kv', 'hashes'); if (hs) HASH = hs; else rebuildHashes();
     SY.cfg = (await DB.get('kv', 'syncCfg')) || null;
+    SY.dirty = !!(SY.cfg?.on && (await DB.get('kv', 'syncDirty')));
     try { SY.key = (await DB.get('kv', 'syncKey')) || null; } catch (e) { SY.key = null; }
     const tk = await DB.get('kv', 'syncToken'); if (tk && tk.exp > Date.now()) { SY.token = tk.t; SY.exp = tk.exp; }
   } catch (e) {
