@@ -1,6 +1,6 @@
 'use strict';
 /* Health Records — offline web app. All data stays on this device (IndexedDB). */
-const APP_VERSION = '2.4';
+const APP_VERSION = '2.5';
 
 /* ---------------- helpers ---------------- */
 const $ = (s, el = document) => el.querySelector(s);
