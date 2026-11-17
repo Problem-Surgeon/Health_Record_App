@@ -8,7 +8,9 @@
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
-body{min-height:100vh;overscroll-behavior-y:none}
+html,body{height:100%;overflow:hidden;overscroll-behavior:none}
+/* The page itself never scrolls; #app scrolls inside it. This keeps iPhone from dragging the fixed bars around. */
+#app{position:fixed;top:0;left:0;right:0;bottom:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 a{color:var(--purple)}
@@ -156,8 +158,8 @@ textarea.in{height:auto;min-height:80px;padding:12px;resize:vertical;line-height
 .empty{padding:28px 16px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
 
 /* modal */
-.backdrop{position:fixed;inset:0;background:rgba(17,17,20,.35);display:flex;align-items:flex-end;justify-content:center;z-index:20;animation:fade .15s ease}
-.sheet{width:100%;max-width:520px;background:var(--bg);border-radius:28px 28px 0 0;padding:20px 20px calc(var(--safe-bottom) + 20px);display:flex;flex-direction:column;gap:14px;max-height:92vh;overflow:auto;animation:up .2s ease}
+.backdrop{position:fixed;left:0;right:0;top:var(--vvtop,0px);height:var(--vvh,100%);background:rgba(17,17,20,.35);display:flex;align-items:flex-end;justify-content:center;z-index:20;animation:fade .15s ease}
+.sheet{width:100%;max-width:520px;background:var(--bg);border-radius:28px 28px 0 0;padding:20px 20px calc(var(--safe-bottom) + 20px);display:flex;flex-direction:column;gap:14px;max-height:calc(var(--vvh,100vh) - 24px);overflow:auto;animation:up .2s ease}
 .sheet h2{margin:0;font-size:20px;font-weight:700}
 .swatches{display:flex;gap:10px;flex-wrap:wrap}
 .sw{width:40px;height:40px;border-radius:20px;border:3px solid transparent;padding:0}
@@ -175,7 +177,7 @@ textarea.in{height:auto;min-height:80px;padding:12px;resize:vertical;line-height
 .viewer-body iframe{width:100%;height:100%;border:none;background:#fff}
 
 /* lock */
-.lock{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;padding:calc(var(--safe-top) + 20px) 24px calc(var(--safe-bottom) + 20px)}
+.lock{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;padding:calc(var(--safe-top) + 20px) 24px calc(var(--safe-bottom) + 20px)}
 .lock-logo{width:64px;height:64px;border-radius:20px;background:var(--purple);display:flex;align-items:center;justify-content:center;color:#fff}
 .lock-logo svg{width:34px;height:34px}
 .dots{display:flex;gap:18px}

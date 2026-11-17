@@ -1,6 +1,6 @@
 'use strict';
 /* Health Records — offline web app. All data stays on this device (IndexedDB). */
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.4';
 
 /* ---------------- helpers ---------------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -154,10 +154,15 @@ const ailmentOf = (id) => S.ailments.find((a) => a.id === id);
 const ailmentsOf = (pid) => S.ailments.filter((a) => a.personId === pid);
 const byDateAsc = (a, b) => (a.date || '').localeCompare(b.date || '') || (a.created || 0) - (b.created || 0);
 const visitsOf = (aid) => S.visits.filter((v) => v.ailmentId === aid).sort(byDateAsc);
-const medsCost = (v) => (v.meds || []).reduce((s, m) => s + num(m.cost), 0);
+const qtyOf = (m) => num(m.qty) || 1;
+const lineCost = (m) => num(m.cost) * qtyOf(m);
+const medsCost = (v) => (v.meds || []).reduce((s, m) => s + lineCost(m), 0);
 const visitTotal = (v) => num(v.fee) + medsCost(v);
 const refillsOf = (aid) => S.refills.filter((r) => r.ailmentId === aid).sort(byDateAsc);
-const refillTotal = (r) => (r.meds || []).reduce((s, m) => s + num(m.cost), 0);
+const refillTotal = (r) => (r.meds || []).reduce((s, m) => s + lineCost(m), 0);
+// quantity in grey, medicine name darker
+const medHtml = (m) => ((m.qty || '').toString().trim() ? `<span style="color:#8A8A93">${esc(String(m.qty).trim())} ×</span> ` : '') + `<span style="color:#26262C;font-weight:500">${esc(m.name || '')}</span>`;
+const priceNote = (m) => num(m.cost) && num(m.qty) > 1 ? `${rs(num(m.cost))} each` : '';
 const medLabel = (m) => ((m.qty || '').toString().trim() ? `${String(m.qty).trim()} × ` : '') + (m.name || '');
 const ailmentTotal = (aid) => visitsOf(aid).reduce((s, v) => s + visitTotal(v), 0) + refillsOf(aid).reduce((s, r) => s + refillTotal(r), 0);
 const lastDate = (a) => visitsOf(a.id).reduce((d, v) => (v.date > d ? v.date : d), a.start || '');
@@ -180,9 +185,10 @@ const UI = {
 };
 const stack = [{ name: 'home' }];
 const cur = () => stack[stack.length - 1];
-function go(r) { stack.push(r); render(); window.scrollTo(0, 0); }
-function back() { if (stack.length > 1) stack.pop(); render(); window.scrollTo(0, 0); }
-function tab(name) { stack.length = 0; stack.push({ name }); render(); window.scrollTo(0, 0); }
+const toTop = () => { const a = document.getElementById('app'); if (a) a.scrollTop = 0; };
+function go(r) { stack.push(r); render(); toTop(); }
+function back() { if (stack.length > 1) stack.pop(); render(); toTop(); }
+function tab(name) { stack.length = 0; stack.push({ name }); render(); toTop(); }
 
 let toastTimer;
 function toast(msg) {
@@ -324,13 +330,13 @@ const VIEWS = {
         <div class="field"><label class="flabel" for="v-date">Date</label><input class="in" id="v-date" type="date" value="${esc(d.date)}" data-bind="draft.date"></div>
       </div>
       <div class="card pad col" style="gap:8px">
-        <div class="med-head"><span>Name · Duration</span><span>Qty</span><span>Cost ₹</span></div>
+        <span class="flabel">Medicines</span>
         ${d.meds.map((m, i) => `<div class="med">
           <input class="in m-name" aria-label="Medicine ${i + 1} name" placeholder="Medicine name" value="${esc(m.name)}" data-bind="draft.meds.${i}.name">
           <button class="x-btn m-x" data-act="delMed" data-i="${i}" aria-label="Remove medicine ${i + 1}">${ICON.close}</button>
           <input class="in m-dur" aria-label="Medicine ${i + 1} duration" placeholder="Duration" value="${esc(m.dur)}" data-bind="draft.meds.${i}.dur">
           <input class="in m-qty" aria-label="Medicine ${i + 1} quantity" inputmode="numeric" placeholder="Qty" value="${esc(m.qty)}" data-bind="draft.meds.${i}.qty">
-          <input class="in m-cost" aria-label="Medicine ${i + 1} cost in rupees" inputmode="decimal" placeholder="Cost ₹" value="${esc(m.cost)}" data-bind="draft.meds.${i}.cost"></div>`).join('')}
+          <input class="in m-cost" aria-label="Medicine ${i + 1} price per unit in rupees" inputmode="decimal" placeholder="₹ each" value="${esc(m.cost)}" data-bind="draft.meds.${i}.cost"></div>`).join('')}
         <button class="link-btn" data-act="addMed">${ICON.plus} Add medicine</button>
       </div>
       <div class="card pad col" style="gap:12px">
@@ -420,6 +426,12 @@ const VIEWS = {
   }
 };
 
+// A restock belongs to the latest visit on or before its date: "V1" if it is between Visit-1 and Visit-2.
+function visitTag(r) {
+  const vs = visitsOf(r.ailmentId); let n = 0;
+  vs.forEach((v, i) => { if ((v.date || '') <= r.date) n = i + 1; });
+  return n ? `<span class="chip" style="background:#EEEAFE;color:#5B3DF5;padding:3px 8px">V${n}</span>` : '';
+}
 function refillSection(a) {
   const rf = refillsOf(a.id).slice().reverse();
   if (a.type !== 'chronic' && !rf.length) return '';
@@ -429,7 +441,7 @@ function refillSection(a) {
     <div class="row between"><h2 class="label">Medicine restocks</h2>${rf.length ? `<span class="small muted">${plural(rf.length, 'restock')} · ${rs(tot)}</span>` : ''}</div>
     ${!rf.length ? '<div class="card empty" style="padding:18px">No restocks yet. Tap <b>Restock</b> each time you buy the medicines again.</div>'
       : `<div class="card list">${list.map((r) => `<button class="list-item" data-act="editRefill" data-id="${r.id}" style="align-items:flex-start">
-        <span class="col grow" style="gap:3px"><span class="t15">${fmtDate(r.date)}</span><span class="small muted">${esc((r.meds || []).map(medLabel).join(', '))}${r.note ? ' · ' + esc(r.note) : ''}</span></span>
+        <span class="col grow" style="gap:3px"><span class="row" style="gap:8px">${visitTag(r)}<span class="t15">${fmtDate(r.date)}</span></span><span class="small">${(r.meds || []).map(medHtml).join('<span style="color:#8A8A93">, </span>')}${r.note ? `<span style="color:#8A8A93"> · ${esc(r.note)}</span>` : ''}</span></span>
         <span class="t15" style="font-size:14px">${rs(refillTotal(r))}</span></button>`).join('')}</div>
       ${rf.length > 4 ? `<button class="link-btn" data-act="refillsAll" data-id="${a.id}">${showAll ? 'Show fewer' : `Show all ${rf.length}`}</button>` : ''}`}
   </section>`;
@@ -464,7 +476,7 @@ function homeBody() {
       if (a.name.toLowerCase().includes(q)) return true;
       return refillsOf(a.id).some((r) => (r.meds || []).some((m) => (m.name || '').toLowerCase().includes(q))) || visitsOf(a.id).some((v) => (v.meds || []).some((m) => (m.name || '').toLowerCase().includes(q)) || (v.desc || '').toLowerCase().includes(q));
     }).sort((a, b) => (a.type === 'chronic' ? 0 : 1) - (b.type === 'chronic' ? 0 : 1) || lastDate(b).localeCompare(lastDate(a)));
-    return `<section class="col" style="gap:10px"><div class="row between"><h2 class="label">${res.length ? plural(res.length, 'result') : 'No results'}</h2><button class="ghost" data-act="clearSearch">${I('<path d="M18 6 6 18M6 6l12 12"/>', 'width="14" height="14" stroke-width="2.2"')} Clear search</button></div>
+    return `<section class="col" style="gap:10px"><div class="row between"><h2 class="label">${res.length ? plural(res.length, 'result') : 'No results'}</h2><button class="ghost" data-act="clearSearch">${I('<path d="M15 18 9 12l6-6"/>', 'width="16" height="16" stroke-width="2.2"')} Go back</button></div>
       ${res.length ? `<div class="card list">${res.map((a) => `<button class="list-item" data-act="openAilment" data-id="${a.id}">
         <span class="col grow"><span class="t15">${esc(a.name)}</span><span class="small muted">${esc(personOf(a.personId)?.name || '')} · ${fmtDate(lastDate(a)) || 'No date'}</span></span>${typeChip(a.type)}${ICON.chev}</button>`).join('')}</div>`
       : '<div class="card empty">Nothing matches. Try another word.</div>'}</section>`;
@@ -501,7 +513,7 @@ function visitCard(v, n, open, a) {
     </button>
     ${open ? `<div class="visit-body">
       <div class="bill">
-        ${(v.meds || []).map((m) => `<div class="bill-row"><span class="col" style="gap:1px;min-width:0"><span class="t15" style="font-size:14px">${esc(medLabel(m))}</span>${m.dur ? `<span class="small muted" style="font-size:12px">${esc(m.dur)}</span>` : ''}</span><span style="font-size:14px;font-weight:500">${rs(num(m.cost))}</span></div>`).join('')}
+        ${(v.meds || []).map((m) => `<div class="bill-row"><span class="col" style="gap:1px;min-width:0"><span style="font-size:14px">${medHtml(m)}</span>${m.dur || priceNote(m) ? `<span class="small muted" style="font-size:12px">${esc([m.dur, priceNote(m)].filter(Boolean).join(' · '))}</span>` : ''}</span><span style="font-size:14px;font-weight:500">${rs(lineCost(m))}</span></div>`).join('')}
         <div class="bill-row"><span class="t15" style="font-size:14px">Doctor fee</span><span style="font-size:14px;font-weight:500">${rs(num(v.fee))}</span></div>
         <div class="bill-row"><span style="font-size:14px;font-weight:700">Visit total</span><span style="font-size:15px;font-weight:700;color:#5B3DF5">${rs(visitTotal(v))}</span></div>
       </div>
@@ -630,28 +642,46 @@ const SUGAR = {
 };
 const sugarVal = (kind, v) => kind === 'hba1c' ? Number(v).toFixed(1) : String(Math.round(v));
 
+// Estimated HbA1c from home sugar readings, using the ADAG formula (eAG = 28.7 × A1c − 46.7),
+// i.e. A1c ≈ (average glucose + 46.7) / 28.7, over the 90 days before each day.
+const addDays = (iso, n) => { const [y, m, d] = iso.split('-').map(Number); return isoOf(new Date(y, m - 1, d + n)); };
+const eA1c = (avg) => (avg + 46.7) / 28.7;
+function a1cSeries(glucose) {
+  const days = dailyAvg(glucose, ['value']);
+  return days.map((d) => {
+    const from = addDays(d.date, -89);
+    const win = days.filter((x) => x.date >= from && x.date <= d.date);
+    const avg = win.reduce((t, x) => t + x.value, 0) / win.length;
+    return { date: d.date, n: 1, value: eA1c(avg), avg, span: win.length };
+  });
+}
+
 function sugarCard() {
   if (!S.people.length) return '';
   const pills = personPills();
   const p = personOf(UI.ins.bpPerson);
   const t = UI.ins.sugarTab;
-  const mine = S.sugar.filter((r) => r.personId === p.id).sort(byDateTime);
-  const sel = t === 'avg' ? mine.filter((r) => r.kind !== 'hba1c') : mine.filter((r) => r.kind === t);
-  const days = dailyAvg(sel, ['value']).slice(-12);
-  const unit = t === 'hba1c' ? '%' : 'mg/dL';
+  const glucose = S.sugar.filter((r) => r.personId === p.id && r.kind !== 'hba1c').sort(byDateTime);
+  const isA1c = t === 'hba1c';
+  const sel = t === 'avg' || isA1c ? glucose : glucose.filter((r) => r.kind === t);
+  const days = (isA1c ? a1cSeries(glucose) : dailyAvg(sel, ['value'])).slice(-12);
+  const unit = isA1c ? '%' : 'mg/dL';
   const color = t === 'avg' ? '#111114' : SUGAR[t].color;
   const refs = t === 'avg' ? [{ v: 100, label: '100' }, { v: 140, label: '140' }] : SUGAR[t].refs;
   const last = days[days.length - 1];
   const tabs = [['avg', 'Average'], ['fasting', 'Fasting'], ['pp', 'PPBS'], ['hba1c', 'HbA1c']].map(([id, l]) => `<button class="${t === id ? 'on' : ''}" data-act="sugarTab" data-v="${id}" aria-pressed="${t === id}">${l}</button>`).join('');
-  const chart = days.length ? lineChart(days, [{ color, vals: days.map((d) => d.value) }], refs, `${t === 'avg' ? 'Average' : SUGAR[t].label} blood sugar for ${p.name}`)
-    : `<div class="empty" style="padding:12px">No ${t === 'avg' ? 'sugar' : SUGAR[t].label} readings yet.</div>`;
-  const recent = sel.slice(-6).reverse();
+  const chart = days.length ? lineChart(days, [{ color, vals: days.map((d) => d.value) }], refs, `${isA1c ? 'Estimated HbA1c' : t === 'avg' ? 'Average blood sugar' : SUGAR[t].label + ' blood sugar'} for ${p.name}`)
+    : `<div class="empty" style="padding:12px">No ${t === 'avg' || isA1c ? 'sugar' : SUGAR[t].label} readings yet.</div>`;
+  const head = !last ? '<span class="small muted">—</span>'
+    : isA1c ? `<span style="font-size:24px;font-weight:700">${last.value.toFixed(1)} <span class="small muted" style="font-weight:500">% · from ${plural(last.span, 'day')} of readings, avg ${Math.round(last.avg)} mg/dL</span></span>`
+    : `<span style="font-size:24px;font-weight:700">${sugarVal(t, last.value)} <span class="small muted" style="font-weight:500">${unit} · ${last.n > 1 ? `avg of ${last.n} · ` : ''}${fmtDate(last.date).slice(0, 6)}</span></span>`;
+  const recent = isA1c ? [] : sel.slice(-6).reverse();
   return `<section class="card pad col" style="gap:12px;padding:16px">
-    <div class="col"><h2 class="flabel" style="margin:0;font-size:13px">Blood sugar${t === 'avg' ? ' · average of fasting, PPBS & random' : ''}</h2>
-      ${last ? `<span style="font-size:24px;font-weight:700">${sugarVal(t, last.value)} <span class="small muted" style="font-weight:500">${unit} · ${last.n > 1 ? `avg of ${last.n} · ` : ''}${fmtDate(last.date).slice(0, 6)}</span></span>` : '<span class="small muted">—</span>'}</div>
+    <div class="col"><h2 class="flabel" style="margin:0;font-size:13px">${isA1c ? 'Estimated HbA1c · worked out from your sugar readings' : 'Blood sugar' + (t === 'avg' ? ' · average of fasting, PPBS & random' : '')}</h2>${head}</div>
     ${pills}
     <div class="seg">${tabs}</div>
     ${chart}
+    ${isA1c ? `<p class="small muted" style="margin:0;line-height:1.5">Each point uses the average of all sugar readings in the 90 days before it: HbA1c ≈ (average sugar + 46.7) ÷ 28.7.${last && last.span < 14 ? ' <b style="color:#B42318">Needs about 2 weeks of readings to be meaningful.</b>' : ''} Fasting and after-meal checks don’t capture the whole day, so a lab HbA1c test can differ.</p>` : ''}
     <div class="row" style="justify-content:flex-end"><button class="btn dark" style="flex:none;height:40px;font-size:13px;padding:0 14px" data-act="newSugar">${ICON.plus} Add reading</button></div>
     ${recent.length ? `<div class="list" style="border-top:1px solid #EFEFF3">${recent.map((r) => `<div class="list-item" style="padding:10px 0"><span class="col grow" style="gap:1px"><span class="small">${when(r)}</span><span class="small muted" style="font-size:12px">${SUGAR[r.kind]?.label || ''}</span></span><b class="small">${sugarVal(r.kind, r.value)} ${SUGAR[r.kind]?.unit || ''}</b><button class="x-btn" data-act="delSugar" data-id="${r.id}" aria-label="Delete sugar reading from ${when(r)}">${ICON.trash}</button></div>`).join('')}</div>` : ''}
   </section>`;
@@ -675,15 +705,15 @@ function modalView() {
       <div class="field"><label class="flabel" for="m-start">Starting date</label><input class="in" id="m-start" type="date" value="${esc(d.start)}" data-bind="modal.data.start"></div>
       <div class="btn-row">${d.id ? '<button class="btn danger" data-act="mDeleteAilment">Delete</button>' : '<button class="btn" data-act="closeModal">Cancel</button>'}<button class="btn dark" data-act="mSaveAilment">Save</button></div>`;
   } else if (m.kind === 'refill') {
-    const sum = d.meds.reduce((t, x) => t + num(x.cost), 0);
+    const sum = d.meds.reduce((t, x) => t + lineCost(x), 0);
     body = `<h2>${d.id ? 'Edit restock' : 'Restock medicines'}</h2><p class="sub" style="margin-top:-8px">${esc(ailmentOf(d.ailmentId)?.name || '')}${d.prefilled ? ' · filled in from last time, change anything' : ''}</p>
       <div class="field"><label class="flabel" for="m-rfdate">Date bought</label><input class="in" id="m-rfdate" type="date" value="${esc(d.date)}" data-bind="modal.data.date"></div>
-      <div class="card pad col" style="gap:8px"><div class="med-head rf"><span>Name · Qty</span><span>Cost ₹</span></div>
+      <div class="card pad col" style="gap:8px"><span class="flabel">Medicines</span>
         ${d.meds.map((x, i) => `<div class="med rf">
           <input class="in m-name" aria-label="Medicine ${i + 1} name" placeholder="Medicine name" value="${esc(x.name)}" data-bind="modal.data.meds.${i}.name">
           <button class="x-btn m-x" data-act="rDelMed" data-i="${i}" aria-label="Remove medicine ${i + 1}">${ICON.close}</button>
           <input class="in m-qty" aria-label="Medicine ${i + 1} quantity" inputmode="numeric" placeholder="Qty" value="${esc(x.qty)}" data-bind="modal.data.meds.${i}.qty">
-          <input class="in m-cost" aria-label="Medicine ${i + 1} cost in rupees" inputmode="decimal" placeholder="Cost ₹" value="${esc(x.cost)}" data-bind="modal.data.meds.${i}.cost"></div>`).join('')}
+          <input class="in m-cost" aria-label="Medicine ${i + 1} price per unit in rupees" inputmode="decimal" placeholder="₹ each" value="${esc(x.cost)}" data-bind="modal.data.meds.${i}.cost"></div>`).join('')}
         <button class="link-btn" data-act="rAddMed">${ICON.plus} Add medicine</button>
         <div class="totals"><div class="big"><span>Total</span><span id="r-total">${rs(sum)}</span></div></div>
       </div>
@@ -699,7 +729,7 @@ function modalView() {
   } else if (m.kind === 'sugar') {
     const k = SUGAR[d.kind];
     body = `<h2>Add sugar reading</h2><p class="sub" style="margin-top:-8px">${esc(personOf(d.personId)?.name || '')}</p>
-      <div class="field"><span class="flabel">Type</span><div class="seg">${Object.entries(SUGAR).map(([id, x]) => `<button class="${d.kind === id ? 'on' : ''}" data-act="mSugarKind" data-v="${id}" aria-pressed="${d.kind === id}">${x.label}</button>`).join('')}</div></div>
+      <div class="field"><span class="flabel">Type</span><div class="seg">${Object.entries(SUGAR).filter(([id]) => id !== 'hba1c').map(([id, x]) => `<button class="${d.kind === id ? 'on' : ''}" data-act="mSugarKind" data-v="${id}" aria-pressed="${d.kind === id}">${x.label}</button>`).join('')}</div></div>
       <div class="grid2"><div class="field"><label class="flabel" for="m-sdate">Date</label><input class="in" id="m-sdate" type="date" value="${esc(d.date)}" data-bind="modal.data.date"></div>
       <div class="field"><label class="flabel" for="m-stime">Time</label><input class="in" id="m-stime" type="time" value="${esc(d.time)}" data-bind="modal.data.time"></div></div>
       <div class="field"><label class="flabel" for="m-sval">${k.label} (${k.unit})</label><input class="in" id="m-sval" inputmode="decimal" placeholder="${d.kind === 'hba1c' ? 'e.g. 6.8' : 'e.g. 110'}" value="${esc(d.value)}" data-bind="modal.data.value"></div>
@@ -734,7 +764,7 @@ function buildExport() {
       const n = i + 1;
       if (UI.ex.excl.includes(v.id)) return;
       L.push(`• ${vName(v, n)} — ${fmtDate(v.date)}`);
-      for (const m of v.meds || []) L.push(`   - ${medLabel(m)}${m.dur ? ` (${m.dur})` : ''}${num(m.cost) ? ` — ${rs(num(m.cost))}` : ''}`);
+      for (const m of v.meds || []) L.push(`   - ${medLabel(m)}${m.dur ? ` (${m.dur})` : ''}${num(m.cost) ? ` — ${rs(lineCost(m))}${priceNote(m) ? ` (${priceNote(m)})` : ''}` : ''}`);
       if (num(v.fee)) L.push(`   Doctor fee: ${rs(num(v.fee))}`);
       if (visitTotal(v)) L.push(`   Visit total: ${rs(visitTotal(v))}`);
       if (v.desc) L.push(`   Notes: ${v.desc.replace(/\n+/g, ' ')}`);
@@ -747,7 +777,7 @@ function buildExport() {
     const rf = UI.ex.refills ? refillsOf(a.id) : [];
     if (rf.length) {
       L.push('Medicine restocks:');
-      for (const r of rf) { const t = refillTotal(r); grand += t; L.push(`• ${fmtDate(r.date)}: ${(r.meds || []).map(medLabel).join(', ')}${t ? ` — ${rs(t)}` : ''}${r.note ? ` (${r.note})` : ''}`); }
+      for (const r of rf) { const t = refillTotal(r); grand += t; L.push(`• ${fmtDate(r.date)}: ${(r.meds || []).map((m) => medLabel(m) + (priceNote(m) ? ` @ ${priceNote(m)}` : '')).join(', ')}${t ? ` — ${rs(t)}` : ''}${r.note ? ` (${r.note})` : ''}`); }
     }
     L.push('');
   }
@@ -1303,14 +1333,14 @@ const ACTIONS = {
   },
   delReading: async (el) => { if (!confirm('Delete this reading?')) return; S.readings = S.readings.filter((r) => r.id !== el.dataset.id); await save(); render(); },
   sugarTab: (el) => { UI.ins.sugarTab = el.dataset.v; render(); },
-  newSugar: () => { const t = UI.ins.sugarTab; openModal('sugar', { personId: UI.ins.bpPerson, kind: t === 'avg' ? 'fasting' : t, date: today(), time: nowTime(), value: '' }); setTimeout(() => $('#m-sval')?.focus(), 60); },
+  newSugar: () => { const t = UI.ins.sugarTab; openModal('sugar', { personId: UI.ins.bpPerson, kind: t === 'avg' || t === 'hba1c' ? 'fasting' : t, date: today(), time: nowTime(), value: '' }); setTimeout(() => $('#m-sval')?.focus(), 60); },
   mSugarKind: (el) => { UI.modal.data.kind = el.dataset.v; renderModal(); },
   mSaveSugar: async () => {
     const d = UI.modal.data; const v = num(d.value);
     if (!d.date) return toast('Please pick a date');
     if (d.kind === 'hba1c' ? (v < 3 || v > 20) : (v < 20 || v > 700)) return toast(d.kind === 'hba1c' ? 'HbA1c is usually between 4 and 15 %' : 'Check the number (mg/dL)');
     S.sugar.push({ id: uid(), personId: d.personId, kind: d.kind, date: d.date, time: d.time || '', value: d.kind === 'hba1c' ? Math.round(v * 10) / 10 : Math.round(v), created: Date.now() });
-    if (UI.ins.sugarTab !== 'avg' || d.kind === 'hba1c') UI.ins.sugarTab = d.kind === 'random' ? 'avg' : d.kind;
+    if (!['avg', 'hba1c'].includes(UI.ins.sugarTab)) UI.ins.sugarTab = d.kind === 'random' ? 'avg' : d.kind;
     await save(); closeModal(); render(); toast('Reading saved');
   },
   delSugar: async (el) => { if (!confirm('Delete this reading?')) return; S.sugar = S.sugar.filter((r) => r.id !== el.dataset.id); await save(); render(); },
@@ -1377,8 +1407,8 @@ function onBind(ev) {
   const el = ev.target; const path = el.dataset && el.dataset.bind; if (!path) return;
   setPath(path, el.value);
   if (path.startsWith('search.')) { const hb = $('#home-body'); if (hb) hb.innerHTML = homeBody(); }
-  if (path.startsWith('draft.') && (path.endsWith('.cost') || path === 'draft.fee')) updateTotals();
-  if (path.startsWith('modal.data.meds') && path.endsWith('.cost')) { const el2 = document.getElementById('r-total'); if (el2) el2.textContent = rs(UI.modal.data.meds.reduce((t, x) => t + num(x.cost), 0)); }
+  if (path.startsWith('draft.') && (path.endsWith('.cost') || path.endsWith('.qty') || path === 'draft.fee')) updateTotals();
+  if (path.startsWith('modal.data.meds') && (path.endsWith('.cost') || path.endsWith('.qty'))) { const el2 = document.getElementById('r-total'); if (el2) el2.textContent = rs(UI.modal.data.meds.reduce((t, x) => t + lineCost(x), 0)); }
 }
 document.addEventListener('input', onBind);
 document.addEventListener('change', (ev) => {
@@ -1397,6 +1427,19 @@ document.addEventListener('visibilitychange', () => {
   if (UI.pin && !UI.locked && UI.hiddenAt && Date.now() - UI.hiddenAt > 120000 && !REC.mr) lockApp();
   else if (!UI.locked && SY.cfg?.on && tokenOk() && Date.now() - (SY.cfg.lastSync || 0) > 60000) runSync();
 });
+
+/* Keep pop-up sheets above the iPhone keyboard: size them to the visible part of the screen. */
+function syncViewport() {
+  const vv = window.visualViewport; if (!vv) return;
+  const r = document.documentElement.style;
+  r.setProperty('--vvh', vv.height + 'px'); r.setProperty('--vvtop', vv.offsetTop + 'px');
+}
+if (window.visualViewport) { visualViewport.addEventListener('resize', syncViewport); visualViewport.addEventListener('scroll', syncViewport); syncViewport(); }
+document.addEventListener('focusin', (ev) => {
+  const el = ev.target; if (!el.matches || !el.matches('input, textarea, select')) return;
+  setTimeout(() => { syncViewport(); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 350);
+});
+document.addEventListener('focusout', () => { setTimeout(() => { if (!document.activeElement || !document.activeElement.matches('input, textarea, select')) { window.scrollTo(0, 0); syncViewport(); } }, 100); });
 
 /* ---------------- start ---------------- */
 (async function init() {
