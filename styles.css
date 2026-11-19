@@ -238,3 +238,20 @@ input[type=date]::-webkit-date-and-time-value,input[type=time]::-webkit-date-and
 .ml-wrap{flex:1;display:flex;align-items:center;gap:8px}
 .ml-wrap span{font-weight:600;color:var(--muted)}
 .med.vm.rs{grid-template-columns:64px minmax(0,1fr) 92px 32px;grid-template-areas:'name name name x' 'qty pack cost .' 'sch sch sch sch'}
+.lab-card{border-color:#C9D7FB}
+.lab-ic{width:28px;height:28px;border-radius:14px;background:#E8EEFD;color:#1D4ED8;display:flex;align-items:center;justify-content:center;flex:none}
+.lab-ic svg{width:18px;height:18px}
+.lab-row{display:flex;align-items:center;gap:10px;background:#F4F6FE;border-radius:14px;padding:8px 6px 8px 10px}
+.lab-name{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kind{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;letter-spacing:.02em;flex:none}
+.kind.big{width:44px;height:52px;font-size:11px}
+.kind.pdf{background:#FDECEC;color:#B42318}.kind.img{background:#E8EEFD;color:#1D4ED8}
+.dashed.lab{border-color:#9DB3F5;color:#1D4ED8}
+.file-chip.lab{border-color:#C9D7FB;background:#F4F6FE}
+.file-chip.lab svg{color:#1D4ED8;width:16px;height:16px}
+.lab-item{width:100%;text-align:left;padding:12px;display:flex;align-items:center;gap:12px;border-radius:20px;color:var(--text)}
+.fab-row{position:fixed;right:max(20px,calc(50% - 240px));bottom:calc(var(--safe-bottom) + 28px);display:flex;align-items:center;gap:12px;z-index:5}
+.fab-row .fab{position:static}
+.lab-fab{width:56px;height:56px;border-radius:28px;background:var(--card);border:1px solid var(--line);box-shadow:0 6px 20px rgba(17,17,20,.10);display:flex;align-items:center;justify-content:center;color:#1D4ED8;position:relative;padding:0}
+.lab-fab svg{width:34px;height:34px}
+.lab-fab .badge{position:absolute;top:-4px;right:-4px;min-width:22px;height:22px;padding:0 6px;box-sizing:border-box;border-radius:11px;background:#1D4ED8;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid var(--bg)}

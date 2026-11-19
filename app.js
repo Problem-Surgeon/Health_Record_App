@@ -1,6 +1,6 @@
 'use strict';
 /* Health Records — offline web app. All data stays on this device (IndexedDB). */
-const APP_VERSION = '2.10';
+const APP_VERSION = '3.0';
 
 /* ---------------- helpers ---------------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -75,6 +75,7 @@ const ICON = {
   send: I('<path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>', 'stroke-width="2"'),
   lock: I('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
   del: I('<path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="m17 9-6 6M11 9l6 6"/>'),
+  lab: I('<path d="M13 2.5H5.5a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2H11"/><path d="M13 2.5v4.5h4.5"/><path d="M13 2.5 17.5 7v3.5"/><path d="M6.5 10.5h6M6.5 14h3.5"/><path d="M15 12.5h4.5M16 12.5v3l-2.6 4.6a1 1 0 0 0 .9 1.4h5.9a1 1 0 0 0 .9-1.4L18.5 15.5v-3"/><path d="M14.6 18.2h5.3"/>', 'stroke-width="1.5"'),
   heart: I('<path d="M12 21s-7.5-4.6-9.5-9.3C1 8 3.3 4 7 4c2 0 3.5 1 5 3 1.5-2 3-3 5-3 3.7 0 6 4 4.5 7.7C19.5 16.4 12 21 12 21z"/><path d="M8 12h2l1.5-3 2 6 1.5-3h1"/>', 'stroke-width="2"')
 };
 
@@ -209,7 +210,13 @@ const lastDate = (a) => visitsOf(a.id).reduce((d, v) => (v.date > d ? v.date : d
 // Visits are numbered by date: Visit-1 is the oldest. A custom name replaces the "Visit-N" label.
 const visitPos = (v) => { const vs = visitsOf(v.ailmentId); const i = vs.findIndex((x) => x.id === v.id); return i < 0 ? vs.length + 1 : i + 1; };
 const vName = (v, pos) => 'Visit-' + (pos ?? visitPos(v));
-const fileCount = (aid) => visitsOf(aid).reduce((s, v) => s + (v.files || []).length + (v.voice || []).length, 0);
+const fileCount = (aid) => visitsOf(aid).reduce((s, v) => s + (v.files || []).length + (v.voice || []).length + (v.labs || []).length, 0);
+// all lab reports of a person, newest visit first
+function labsOf(pid) {
+  const out = [];
+  for (const a of ailmentsOf(pid)) visitsOf(a.id).forEach((v, i) => (v.labs || []).forEach((f, j) => out.push({ f, a, v, n: i + 1, j })));
+  return out.sort((x, y) => (y.v.date || '').localeCompare(x.v.date || '') || (y.v.created || 0) - (x.v.created || 0) || x.j - y.j);
+}
 
 /* ---------------- UI state & navigation ---------------- */
 const UI = {
@@ -320,7 +327,8 @@ const VIEWS = {
           <span class="col grow"><span class="t15">${esc(a.name)}</span><span class="small muted">${fmtDate(lastDate(a)) || 'No date'} · ${plural(visitsOf(a.id).length, 'visit')}</span></span>
           ${typeChip(a.type)}${ICON.chev}</button>`).join('')}</div></section>` : ''}
     </main>
-    <button class="fab" data-act="newAilment" data-id="${p.id}">${ICON.plus} Add ailment</button>`;
+    <div class="fab-row"><button class="lab-fab" data-act="openLabs" data-id="${p.id}" aria-label="Lab reports (${labsOf(p.id).length})">${ICON.lab}${labsOf(p.id).length ? `<span class="badge">${labsOf(p.id).length}</span>` : ''}</button>
+      <button class="fab" data-act="newAilment" data-id="${p.id}">${ICON.plus} Add ailment</button></div>`;
   },
 
   ailment(r) {
@@ -353,6 +361,28 @@ const VIEWS = {
     </main>
     ${a.type === 'chronic' ? `<div class="bottom-pair"><button class="btn" data-act="newRefill" data-id="${a.id}">${ICON.refill} Restock</button><button class="btn primary" data-act="newVisit" data-id="${a.id}">${ICON.plus} Add visit</button></div>`
       : `<button class="bottom-btn" data-act="newVisit" data-id="${a.id}">${ICON.plus} Add visit</button>`}`;
+  },
+
+  labs(r) {
+    const p = personOf(r.id); if (!p) return VIEWS.home();
+    const all = labsOf(p.id);
+    const ails = [...new Map(all.map((x) => [x.a.id, x.a])).values()];
+    if (UI.labFilter && UI.labFilter !== 'all' && !ails.some((a) => a.id === UI.labFilter)) UI.labFilter = 'all';
+    const f = UI.labFilter || 'all';
+    const list = f === 'all' ? all : all.filter((x) => x.a.id === f);
+    const pc = p.color === '#111114' ? '#111114' : pal(p.color).fg;
+    return `<main class="screen no-nav">
+      <div class="row"><button class="icon-btn" data-act="back" aria-label="Back">${ICON.back}</button>
+        <div class="col" style="gap:2px"><span style="font-size:17px;font-weight:600;color:${pc}">${esc(p.name)}</span><h1 class="sm">Lab reports</h1></div></div>
+      ${ails.length > 1 ? `<div class="pills">${[{ id: 'all', name: 'All' }, ...ails].map((a) => `<button class="pill ${f === a.id ? 'on' : ''}" style="height:36px;font-size:13px" data-act="labFilter" data-v="${a.id}" aria-pressed="${f === a.id}">${esc(a.name)}</button>`).join('')}</div>` : ''}
+      ${!all.length ? `<div class="card empty">No lab reports yet.<br>Add them in a visit, under <b>Lab reports</b>.</div>`
+        : `<span class="small muted">${plural(list.length, 'report')} · newest first</span>
+      <div class="col" style="gap:10px">${list.map((x) => `<button class="card lab-item" data-act="openFile" data-id="${x.f.id}" data-name="${esc(x.f.name)}" data-type="${esc(x.f.type)}">
+        <span class="kind big ${x.f.type.startsWith('image') ? 'img' : 'pdf'}">${x.f.type.startsWith('image') ? 'IMG' : 'PDF'}</span>
+        <span class="col grow" style="gap:4px;min-width:0"><span class="lab-name" style="font-size:15px">${esc(x.f.name)}</span>
+          <span class="row small muted" style="gap:6px;font-size:12px"><span class="chip" style="background:#EEEAFE;color:#5B3DF5;padding:2px 7px">V${x.n}</span><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(x.a.name)}</span></span></span>
+        <span class="small muted" style="font-size:12px;white-space:nowrap">${fmtDate(x.v.date)}</span></button>`).join('')}</div>`}
+    </main>`;
   },
 
   visitEdit() {
@@ -395,11 +425,19 @@ const VIEWS = {
         <span class="flabel">Attachments &amp; voice notes</span>
         ${d.files.length ? `<div class="files">${d.files.map((f, i) => `<span class="file-chip">${f.type.startsWith('image') ? ICON.image : ICON.pdf}<span>${esc(f.name)}</span><button class="x-btn" style="width:24px;height:24px" data-act="delFile" data-i="${i}" aria-label="Remove ${esc(f.name)}">${ICON.close}</button></span>`).join('')}</div>` : ''}
         <div class="grid2">
-          <button class="dashed" data-act="pick" data-input="file-pdf">${ICON.pdf} Add PDF</button>
-          <button class="dashed" data-act="pick" data-input="file-img">${ICON.image} Add photo</button>
+          <button class="dashed" data-act="pick" data-input="file-pdf" data-target="files">${ICON.pdf} Add PDF</button>
+          <button class="dashed" data-act="pick" data-input="file-img" data-target="files">${ICON.image} Add photo</button>
         </div>
         ${d.voice.map((n, i) => `<div class="voice"><button class="play" data-act="playVoice" data-id="${n.id}" aria-label="Play voice note ${i + 1}">${ICON.play}</button>${wave(n.id)}<span class="small muted">${fmtDur(n.dur)}</span><button class="x-btn" data-act="delVoice" data-i="${i}" aria-label="Remove voice note ${i + 1}">${ICON.close}</button></div>`).join('')}
         <button class="rec ${recOn ? 'on' : ''}" data-act="rec" aria-pressed="${recOn}"><span class="dot">${recOn ? ICON.stop : ICON.mic}</span><span id="rec-label">${recOn ? 'Recording… ' + fmtDur((Date.now() - REC.start) / 1000) + ' · tap to stop' : 'Record voice note'}</span></button>
+      </div>
+      <div class="card pad col lab-card" style="gap:10px">
+        <div class="row" style="gap:8px"><span class="lab-ic">${ICON.lab}</span><span class="t15 grow" style="font-size:14px;font-weight:700">Lab reports</span><span class="small muted" style="font-size:12px">Also in ${esc(p?.name || '')}’s Lab reports</span></div>
+        ${d.labs.map((f, i) => `<div class="lab-row"><span class="kind ${f.type.startsWith('image') ? 'img' : 'pdf'}">${f.type.startsWith('image') ? 'IMG' : 'PDF'}</span><span class="col grow" style="gap:1px;min-width:0"><span class="lab-name">${esc(f.name)}</span><span class="small muted" style="font-size:12px">${f.type.startsWith('image') ? 'Photo' : 'PDF'}${f.size ? ' · ' + Math.max(1, Math.round(f.size / 1024)) + ' KB' : ''}</span></span><button class="x-btn" data-act="delLab" data-i="${i}" aria-label="Remove ${esc(f.name)}">${ICON.close}</button></div>`).join('')}
+        <div class="grid2">
+          <button class="dashed lab" data-act="pick" data-input="file-pdf" data-target="labs">${ICON.pdf} Report PDF</button>
+          <button class="dashed lab" data-act="pick" data-input="file-img" data-target="labs">${ICON.image} Report photo</button>
+        </div>
       </div>
     </main>
     <button class="bottom-btn dark" data-act="saveVisit" ${recOn ? 'disabled' : ''}>Save visit</button>`;
@@ -561,6 +599,7 @@ function visitCard(v, n, open, a) {
       ${v.desc ? `<p class="desc">${esc(v.desc)}</p>` : ''}
       ${(v.files || []).length ? `<div class="files">${v.files.map((f) => `<button class="file-chip" data-act="openFile" data-id="${f.id}" data-name="${esc(f.name)}" data-type="${esc(f.type)}">${f.type.startsWith('image') ? ICON.image : ICON.file}<span>${esc(f.name)}</span></button>`).join('')}</div>` : ''}
       ${(v.voice || []).map((nt, i) => `<div class="voice"><button class="play" data-act="playVoice" data-id="${nt.id}" aria-label="Play voice note ${i + 1}">${ICON.play}</button>${wave(nt.id)}<span class="small muted">${fmtDur(nt.dur)}</span></div>`).join('')}
+      ${(v.labs || []).length ? `<div class="col" style="gap:6px"><span class="flabel" style="color:#1D4ED8">Lab reports</span><div class="files">${v.labs.map((f) => `<button class="file-chip lab" data-act="openFile" data-id="${f.id}" data-name="${esc(f.name)}" data-type="${esc(f.type)}">${ICON.lab}<span>${esc(f.name)}</span></button>`).join('')}</div></div>` : ''}
       <div class="visit-actions"><button class="ghost" data-act="editVisit" data-id="${v.id}">${I('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>', 'width="16" height="16"')} Edit</button><button class="ghost danger" data-act="deleteVisit" data-id="${v.id}">${ICON.trash} Delete</button></div>
     </div>` : ''}
   </div>`;
@@ -813,6 +852,7 @@ function buildExport() {
       if (v.desc) L.push(`   Notes: ${v.desc.replace(/\n+/g, ' ')}`);
       const names = [];
       (v.files || []).forEach((f, j) => { const name = `${safeName(a.name)} – visit ${n}-${letter(j)}.${extOf(f.type, f.name)}`; files.push({ id: f.id, name, type: f.type }); names.push(name); });
+      (v.labs || []).forEach((f, j) => { const name = `${safeName(a.name)} – visit ${n} lab-${letter(j)}.${extOf(f.type, f.name)}`; files.push({ id: f.id, name, type: f.type }); names.push(name); });
       if (UI.ex.voice) (v.voice || []).forEach((nt, j) => { const name = `${safeName(a.name)} – visit ${n} voice-${letter(j)}.${extOf(nt.type)}`; files.push({ id: nt.id, name, type: nt.type }); names.push(name); });
       if (names.length) L.push(`   Attached: ${names.join(', ')}`);
       grand += visitTotal(v);
@@ -855,14 +895,14 @@ async function compressImage(file) {
   } catch (e) { /* fall through */ }
   return { blob: file, name: file.name, type: file.type || 'image/jpeg' };
 }
-async function addFiles(list, isImage) {
+async function addFiles(list, isImage, target = 'files') {
   const d = UI.draft; if (!d || !list || !list.length) return;
   toast('Adding…');
   for (const f of list) {
     try {
       const r = isImage ? await compressImage(f) : { blob: f, name: f.name, type: f.type || 'application/pdf' };
       const id = uid(); await putBlob(id, r.blob);
-      d.files.push({ id, name: r.name, type: r.type, size: r.blob.size }); d.added.push(id);
+      (d[target] = d[target] || []).push({ id, name: r.name, type: r.type, size: r.blob.size }); d.added.push(id);
     } catch (e) { toast('Could not add ' + f.name); }
   }
   if (cur().name === 'visitEdit') render();
@@ -1094,7 +1134,7 @@ const deleteFile = (id) => gfetch(`files/${id}`, { method: 'DELETE' });
 
 function blobRefs(st) {
   const m = new Map();
-  for (const v of st.visits) { for (const f of v.files || []) m.set(f.id, f.type || ''); for (const n of v.voice || []) m.set(n.id, n.type || ''); }
+  for (const v of st.visits) { for (const f of v.files || []) m.set(f.id, f.type || ''); for (const n of v.voice || []) m.set(n.id, n.type || ''); for (const f of v.labs || []) m.set(f.id, f.type || ''); }
   return m;
 }
 const tOf = (r) => r.updated || r.created || 0;
@@ -1190,8 +1230,9 @@ function syncSection() {
 function startDraft(v, aid) {
   const isNew = !v;
   UI.draft = isNew
-    ? { id: uid(), ailmentId: aid, isNew, name: '', date: today(), meds: [newMed(defPack(aid))], fee: '', desc: '', files: [], voice: [], added: [], removed: [], created: Date.now() }
+    ? { id: uid(), ailmentId: aid, isNew, name: '', date: today(), meds: [newMed(defPack(aid))], fee: '', desc: '', files: [], labs: [], voice: [], added: [], removed: [], created: Date.now() }
     : { ...JSON.parse(JSON.stringify(v)), isNew, added: [], removed: [], meds: (v.meds || []).map((m) => ({ ...newMed(), name: m.name, qty: m.qty || '', pack: m.form === 'syrup' ? 'unit' : (m.pack || 'unit'), dur: m.dur || '', total: visitLine(m) ? String(Math.round(visitLine(m) * 100) / 100) : '', form: m.form || 'tablet', times: [...(m.times || [])], meal: m.meal || '', portion: m.portion || 'full', ml: m.ml ? String(m.ml) : '' })), fee: v.fee ? String(v.fee) : '' };
+  if (!UI.draft.labs) UI.draft.labs = [];
   if (!UI.draft.meds.length) UI.draft.meds.push(newMed(defPack(aid)));
   go({ name: 'visitEdit' });
 }
@@ -1209,7 +1250,7 @@ async function saveDraft() {
     meds: d.meds.filter((m) => (m.name || '').trim()).map((m) => ({ name: m.name.trim(), qty: String(m.qty || '').trim(), ...(m.dur ? { dur: m.dur } : {}), total: num(m.total),
       pack: m.form === 'syrup' ? 'unit' : (PACKS[m.pack] ? m.pack : 'unit'), form: m.form === 'syrup' ? 'syrup' : 'tablet', times: TIMES.map((t) => t[0]).filter((t) => (m.times || []).includes(t)), meal: m.meal || '',
       ...(m.form === 'syrup' ? { ml: num(m.ml) } : { portion: m.portion === 'half' ? 'half' : 'full' }) })),
-    fee: num(d.fee), desc: (d.desc || '').trim(), files: d.files, voice: d.voice, created: d.created || Date.now(), updated: Date.now()
+    fee: num(d.fee), desc: (d.desc || '').trim(), files: d.files, labs: d.labs || [], voice: d.voice, created: d.created || Date.now(), updated: Date.now()
   };
   const i = S.visits.findIndex((x) => x.id === v.id);
   if (i >= 0) S.visits[i] = v; else S.visits.push(v);
@@ -1242,7 +1283,7 @@ function updateTotals() {
   const set = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
   set('t-meds', rs(medsCost(d))); set('t-fee', rs(num(d.fee))); set('t-total', rs(visitTotal(d)));
 }
-async function deleteBlobsOfVisits(vs) { const ids = []; for (const v of vs) { (v.files || []).forEach((f) => ids.push(f.id)); (v.voice || []).forEach((n) => ids.push(n.id)); } await delBlobs(ids); }
+async function deleteBlobsOfVisits(vs) { const ids = []; for (const v of vs) { (v.files || []).forEach((f) => ids.push(f.id)); (v.labs || []).forEach((f) => ids.push(f.id)); (v.voice || []).forEach((n) => ids.push(n.id)); } await delBlobs(ids); }
 
 const ACTIONS = {
   key: (el) => pressKey(el.dataset.k),
@@ -1326,9 +1367,12 @@ const ACTIONS = {
   medMeal: (el) => { const m = UI.draft.meds[+el.dataset.i]; m.meal = m.meal === el.dataset.v ? '' : el.dataset.v; render(); },
   medPortion: (el) => { UI.draft.meds[+el.dataset.i].portion = el.dataset.v; render(); },
   delMed: (el) => { UI.draft.meds.splice(+el.dataset.i, 1); if (!UI.draft.meds.length) UI.draft.meds.push(newMed(defPack(UI.draft.ailmentId))); render(); },
+  delLab: (el) => { const d = UI.draft; const [f] = d.labs.splice(+el.dataset.i, 1); if (f) { if (d.added.includes(f.id)) { d.added = d.added.filter((x) => x !== f.id); delBlobs([f.id]); } else d.removed.push(f.id); } render(); },
+  openLabs: (el) => go({ name: 'labs', id: el.dataset.id }),
+  labFilter: (el) => { UI.labFilter = el.dataset.v; render(); },
   delFile: (el) => { const d = UI.draft; const [f] = d.files.splice(+el.dataset.i, 1); if (f) { if (d.added.includes(f.id)) { d.added = d.added.filter((x) => x !== f.id); delBlobs([f.id]); } else d.removed.push(f.id); } render(); },
   delVoice: (el) => { const d = UI.draft; const [n] = d.voice.splice(+el.dataset.i, 1); if (n) { if (AUD.id === n.id) stopAudio(); if (d.added.includes(n.id)) { d.added = d.added.filter((x) => x !== n.id); delBlobs([n.id]); } else d.removed.push(n.id); } render(); },
-  pick: (el) => document.getElementById(el.dataset.input).click(),
+  pick: (el) => { UI.pickTarget = el.dataset.target || 'files'; document.getElementById(el.dataset.input).click(); },
   rec: () => toggleRec(),
   playVoice: (el) => playVoice(el.dataset.id),
   openFile: (el) => openFile(el.dataset.id, el.dataset.name, el.dataset.type),
@@ -1492,7 +1536,7 @@ function onBind(ev) {
 document.addEventListener('input', onBind);
 document.addEventListener('change', (ev) => {
   const el = ev.target;
-  if (el.id === 'file-pdf' || el.id === 'file-img') { const files = [...el.files]; el.value = ''; addFiles(files, el.id === 'file-img'); return; }
+  if (el.id === 'file-pdf' || el.id === 'file-img') { const files = [...el.files]; el.value = ''; addFiles(files, el.id === 'file-img', UI.pickTarget || 'files'); return; }
   if (el.id === 'file-backup') { const f = el.files[0]; el.value = ''; if (f) doRestore(f); return; }
   onBind(ev);
 });
